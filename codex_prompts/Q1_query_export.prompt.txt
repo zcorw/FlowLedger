@@ -1,0 +1,6 @@
+目标：查询/汇总/导出。
+范围：
+- 路由：GET /v1/expenses?from=..&to=..&category=.., GET /v1/deposits?...,
+- 路由：GET /v1/summary?range=month&currency=JPY（内部统一换算显示货币）
+- 路由：GET /v1/export.csv?range=month
+请：高效分页，基本索引；pytest：筛选/分页/汇总正确性；导出 CSV 的内容断言。

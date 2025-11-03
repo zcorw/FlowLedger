@@ -1,0 +1,9 @@
+目标：实现记账写接口（消费/存款最小字段）。
+范围：
+- 表：expenses, deposits（amount DECIMAL(20,6), currency, occurred_at_utc TIMESTAMP, note TEXT, category_id?）
+- 路由：
+  POST /v1/expenses
+  POST /v1/deposits
+- 非功能：要求 Header: Idempotency-Key；重复键只入库一次；返回同一资源。
+
+请：迁移/模型/路由/pytest（含幂等测试、缺字段 422、时区解析）与 3 条 cURL。

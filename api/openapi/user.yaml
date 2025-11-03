@@ -1,0 +1,127 @@
+openapi: 3.1.0
+info:
+  title: Flow-Ledger User API
+  version: 1.0.0
+  description: 用户、偏好与 Telegram 绑定接口。来源：Flow-Ledger 需求。
+servers:
+  - url: https://api.example.com/v1
+security:
+  - OAuth2: [read:user, write:user]
+components:
+  securitySchemes:
+    OAuth2:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.example.com/oauth/authorize
+          tokenUrl: https://auth.example.com/oauth/token
+          scopes:
+            read:user: 读取用户
+            write:user: 写用户
+        clientCredentials:
+          tokenUrl: https://auth.example.com/oauth/token
+          scopes:
+            read:user: 读取用户
+            write:user: 写用户
+  headers:
+    XRequestId:
+      schema: { type: string }
+    IdempotencyKey:
+      schema: { type: string }
+  schemas:
+    User:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        telegram_user_id: { type: integer, format: int64, nullable: true }
+        is_bot_enabled: { type: boolean }
+      required: [id, is_bot_enabled]
+    UserPreference:
+      type: object
+      properties:
+        base_currency: { type: string, pattern: '^[A-Z]{3}$' }
+        timezone: { type: string, minLength: 1, maxLength: 64 }
+        language: { type: string, default: zh-CN }
+      required: [base_currency, timezone]
+    Error:
+      type: object
+      properties: { code: {type: string}, message: {type: string}, details: {} }
+paths:
+  /users:
+    post:
+      tags: [user]
+      summary: 注册新用户
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string }
+      responses:
+        '201':
+          description: 已创建
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotency-Key: { $ref: '#/components/headers/IdempotencyKey' }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+                  preferences: { $ref: '#/components/schemas/UserPreference' }
+        '409':
+          description: 冲突
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /users/me:
+    get:
+      tags: [user]
+      summary: 当前用户信息
+      responses:
+        '200':
+          description: 成功
+          content: { application/json: { schema: { $ref: '#/components/schemas/User' } } }
+        '401':
+          description: 未授权
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /users/me/preferences:
+    patch:
+      tags: [user]
+      summary: 更新偏好
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserPreference' }
+      responses:
+        '200':
+          description: 成功
+          content: { application/json: { schema: { $ref: '#/components/schemas/UserPreference' } } }
+        '422':
+          description: 校验失败
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /users/link-telegram:
+    post:
+      tags: [user]
+      summary: 绑定 Telegram
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                link_token: { type: string, description: 可选一次性绑定令牌 }
+      responses:
+        '200':
+          description: 成功
+          content: { application/json: { schema: { $ref: '#/components/schemas/User' } } }
+        '409':
+          description: 重复绑定
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }

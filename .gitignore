@@ -1,0 +1,63 @@
+# ---- OS / Editor ----
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.code-workspace
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Caches & tooling
+.pytest_cache/
+.mypy_cache/
+.pytype/
+.ruff_cache/
+.tox/
+.nox/
+.cache/
+htmlcov/
+coverage.xml
+.coverage*
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs & temp
+logs/
+*.log
+tmp/
+.tmp/
+
+# ---- Environment files ----
+.env
+.env.*
+!.env.example
+
+# ---- Docker / Compose (local overrides) ----
+# Ignore local-only override files if created
+docker-compose.override.yml
+
+# ---- Docs build output (if any) ----
+site/
+docs/_build/
+
+# ---- Secrets (if used locally) ----
+secrets/
+

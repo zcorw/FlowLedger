@@ -1,0 +1,10 @@
+目标：用户与偏好（默认货币/时区/语言）。
+范围：
+- 表：users(id, created_at_utc, ...)、user_prefs(user_id FK, default_currency, timezone, lang)
+- 路由：
+  GET /v1/users/me
+  PATCH /v1/users/me/preferences {default_currency, timezone, lang}
+规则：
+- 入库时间一律 UTC；timezone 必须为 IANA；currency 必须 ISO4217。
+
+请：迁移/模型/路由/pytest（含无效时区/币种校验）与 cURL 示例。

@@ -1,0 +1,15 @@
+目标：实现货币与汇率查询/换算基础能力（不接第三方抓取）。
+范围：
+- 表：currencies(code PK, name)、exchange_rates(date, base, quote, rate DECIMAL(20,6), PK(date,base,quote))
+- 路由：
+  GET /v1/currencies
+  GET /v1/exchange-rates?base=USD&quote=JPY&date=2025-10-31
+  POST /v1/convert {amount, from, to, date?} -> {amount_converted}
+- 规则：全部使用 Decimal，量化到 6 位；日期按 UTC；缺失汇率返回 404
+
+请：
+1) alembic 迁移 + 回滚
+2) SQLAlchemy/模型与 FastAPI 路由
+3) pytest：表约束、缺失汇率、历史日切、四舍五入规则
+4) 3 条 cURL
+5) 仅改动货币模块相关内容

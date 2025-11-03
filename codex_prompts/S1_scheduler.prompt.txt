@@ -1,0 +1,6 @@
+目标：定时提醒。
+范围：
+- 表：reminder_tasks(id, user_id, cron, enabled, payload JSONB, created_at_utc)；执行实例表可选
+- 扫描器：每分钟检查到点任务，推送 Bot 提醒卡片；用户确认后生成记录（复用 L1）
+- 命令：/remind add|list|on|off
+请：模块边界清晰；cron 解析选择成熟库；pytest：到点触发、开关生效；幂等保障。

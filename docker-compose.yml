@@ -1,0 +1,107 @@
+version: "3.9"
+
+name: flow-ledger
+
+services:
+  db:
+    image: postgres:12-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-flow_ledger}
+      POSTGRES_USER: ${POSTGRES_USER:-flow_ledger}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flow_ledger}
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - flow_net
+
+  db-migrate:
+    image: postgres:12-alpine
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-flow_ledger}
+      POSTGRES_USER: ${POSTGRES_USER:-flow_ledger}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flow_ledger}
+    volumes:
+      - ./:/work:ro
+    working_dir: /work
+    entrypoint: ["/bin/sh", "-lc"]
+    command: >-
+      'for f in /work/sql/schema/*.sql; do 
+         echo "Applying $$f"; 
+         PGPASSWORD=$$POSTGRES_PASSWORD psql -h db -U $$POSTGRES_USER -d $$POSTGRES_DB -v ON_ERROR_STOP=1 -f "$$f"; 
+       done && echo "All schema files applied."'
+    networks:
+      - flow_net
+
+  api:
+    image: python:3.11-slim
+    container_name: flow-ledger-api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-flow_ledger}:${POSTGRES_PASSWORD:-flow_ledger}@db:5432/${POSTGRES_DB:-flow_ledger}
+      # 根据实现选择 FastAPI/Flask；此处仅预留占位
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ./:/app
+    working_dir: /app
+    command: ["/bin/sh", "-lc", "echo 'API container is ready for development.' && tail -f /dev/null"]
+    networks:
+      - flow_net
+
+  bot:
+    image: python:3.11-slim
+    container_name: flow-ledger-bot
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN:-REPLACE_ME}
+      API_BASE_URL: ${API_BASE_URL:-http://api:8000/v1}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-flow_ledger}:${POSTGRES_PASSWORD:-flow_ledger}@db:5432/${POSTGRES_DB:-flow_ledger}
+      DEFAULT_LANG: ${DEFAULT_LANG:-zh-CN}
+      DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-UTC}
+      DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-CNY}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ./:/app
+    working_dir: /app
+    command: ["/bin/sh", "-lc", "echo 'Bot container is ready for development.' && tail -f /dev/null"]
+    networks:
+      - flow_net
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    profiles: ["admin"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+    ports:
+      - "${PGADMIN_PORT:-8081}:80"
+    networks:
+      - flow_net
+
+networks:
+  flow_net:
+    driver: bridge
+
+volumes:
+  pgdata:
+    driver: local
+

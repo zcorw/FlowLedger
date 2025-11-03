@@ -1,0 +1,169 @@
+openapi: 3.1.0
+info:
+  title: Flow-Ledger Deposit API
+  version: 1.0.0
+  description: 机构、账户与余额时间序列接口。来源：Flow-Ledger 需求。
+servers:
+  - url: https://api.example.com/v1
+security:
+  - OAuth2: [read:deposit, write:deposit]
+components:
+  securitySchemes:
+    OAuth2:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.example.com/oauth/authorize
+          tokenUrl: https://auth.example.com/oauth/token
+          scopes:
+            read:deposit: 读取存款资源
+            write:deposit: 写入存款资源
+        clientCredentials:
+          tokenUrl: https://auth.example.com/oauth/token
+          scopes:
+            read:deposit: 读取存款资源
+            write:deposit: 写入存款资源
+  headers:
+    XRequestId: { schema: { type: string } }
+    IdempotencyKey: { schema: { type: string } }
+  parameters:
+    Page: { in: query, name: page, schema: { type: integer, minimum: 1, default: 1 } }
+    PageSize: { in: query, name: page_size, schema: { type: integer, minimum: 1, maximum: 200, default: 20 } }
+    FilterStatus: { in: query, name: filter[status], schema: { type: string, enum: [active, inactive] } }
+  schemas:
+    Institution:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        type: { type: string, enum: [bank, broker, other] }
+    Account:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        user_id: { type: integer, format: int64 }
+        institution_id: { type: integer, format: int64 }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        status: { type: string, enum: [active, inactive] }
+    Balance:
+      type: object
+      properties:
+        account_id: { type: integer, format: int64 }
+        amount: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
+        as_of: { type: string, format: date-time }
+paths:
+  /institutions:
+    get:
+      tags: [deposit]
+      summary: 机构列表
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  page: { type: integer }
+                  page_size: { type: integer }
+                  has_next: { type: boolean }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Institution' }
+  /accounts:
+    post:
+      tags: [deposit]
+      summary: 创建账户
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                institution_id: { type: integer, format: int64 }
+                currency: { type: string, pattern: '^[A-Z]{3}$' }
+              required: [institution_id, currency]
+      responses:
+        '201':
+          description: 已创建
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotency-Key: { $ref: '#/components/headers/IdempotencyKey' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+    get:
+      tags: [deposit]
+      summary: 账户列表
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/FilterStatus'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  page: { type: integer }
+                  page_size: { type: integer }
+                  has_next: { type: boolean }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Account' }
+  /accounts/{id}/balances:
+    get:
+      tags: [deposit]
+      summary: 账户余额历史
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer, format: int64 }
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Balance' }
+    post:
+      tags: [deposit]
+      summary: 写入余额快照
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Balance' }
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Balance' }

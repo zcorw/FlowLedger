@@ -1,0 +1,151 @@
+openapi: 3.1.0
+info:
+  title: Flow-Ledger Loan API
+  version: 1.0.0
+  description: 借贷合同、计划与还款接口。来源：Flow-Ledger 需求。
+servers:
+  - url: https://api.example.com/v1
+security:
+  - OAuth2: [read:loan, write:loan]
+components:
+  securitySchemes:
+    OAuth2:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.example.com/oauth/authorize
+          tokenUrl: https://auth.example.com/oauth/token
+          scopes:
+            read:loan: 读取借贷
+            write:loan: 写借贷
+        clientCredentials:
+          tokenUrl: https://auth.example.com/oauth/token
+          scopes:
+            read:loan: 读取借贷
+            write:loan: 写借贷
+  headers:
+    XRequestId: { schema: { type: string } }
+    IdempotencyKey: { schema: { type: string } }
+  schemas:
+    Loan:
+      type: object
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        principal: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        rate_type: { type: string, enum: [fixed, floating] }
+        rate_value: { type: string, pattern: '^\d+(\.\d{1,10})?$' }
+        term_months: { type: integer, minimum: 1 }
+        start_date: { type: string, format: date-time }
+        status: { type: string, enum: [active, closed, defaulted], default: active }
+      required: [principal, currency, rate_type, rate_value, term_months, start_date]
+    Repayment:
+      type: object
+      properties:
+        loan_id: { type: integer, format: int64 }
+        period_no: { type: integer, nullable: true }
+        paid_at: { type: string, format: date-time }
+        principal_paid: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
+        interest_paid: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
+        fee_paid: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
+      required: [loan_id, paid_at]
+    ScheduleItem:
+      type: object
+      properties:
+        period_no: { type: integer }
+        due_date: { type: string, format: date-time }
+        principal_due: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
+        interest_due: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
+paths:
+  /loans:
+    post:
+      tags: [loan]
+      summary: 创建贷款合同
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Loan' }
+      responses:
+        '201':
+          description: 已创建
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotency-Key: { $ref: '#/components/headers/IdempotencyKey' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Loan' }
+    get:
+      tags: [loan]
+      summary: 贷款列表
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Loan' }
+  /loans/{id}:
+    get:
+      tags: [loan]
+      summary: 贷款详情
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Loan' }
+        '404':
+          description: 未找到
+  /loans/{id}/schedule:
+    get:
+      tags: [loan]
+      summary: 还款计划
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ScheduleItem' }
+  /loans/{id}/repayments:
+    post:
+      tags: [loan]
+      summary: 记录还款
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Repayment' }
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Repayment' }

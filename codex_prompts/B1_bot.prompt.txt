@@ -1,0 +1,10 @@
+目标：Telegram Bot 最小可用（轮询）。
+范围：
+- 命令：/start /help /me /set currency|timezone|lang
+- 环境：从 .env 读取 BOT_TOKEN、API_BASE_URL
+- 行为：命令参数解析、调用后端 /v1/users/... 接口同步偏好；记录结构化日志；简单限流。
+
+请：
+- 提供 bot 启动脚本与 README 片段（如何本地运行与配置）
+- 为每个命令提供 1~2 条交互示例（输入/输出）
+- pytest：命令解析单测（可对 API 调用打桩）

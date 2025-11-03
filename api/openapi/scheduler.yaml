@@ -1,0 +1,151 @@
+openapi: 3.1.0
+info:
+  title: Flow-Ledger Scheduler API
+  version: 1.0.0
+  description: 定时任务、实例、提醒与回执接口。来源：Flow-Ledger 需求。
+servers:
+  - url: https://api.example.com/v1
+security:
+  - OAuth2: [read:scheduler, write:scheduler]
+components:
+  securitySchemes:
+    OAuth2:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.example.com/oauth/authorize
+          tokenUrl: https://auth.example.com/oauth/token
+          scopes:
+            read:scheduler: 读取调度资源
+            write:scheduler: 写调度资源
+        clientCredentials:
+          tokenUrl: https://auth.example.com/oauth/token
+          scopes:
+            read:scheduler: 读取调度资源
+            write:scheduler: 写调度资源
+  headers:
+    XRequestId: { schema: { type: string } }
+    IdempotencyKey: { schema: { type: string } }
+  parameters:
+    Page: { in: query, name: page, schema: { type: integer, minimum: 1, default: 1 } }
+    PageSize: { in: query, name: page_size, schema: { type: integer, minimum: 1, maximum: 200, default: 20 } }
+    From: { in: query, name: from, schema: { type: string, format: date-time } }
+    To: { in: query, name: to, schema: { type: string, format: date-time } }
+    Status:
+      in: query
+      name: status
+      schema: { type: string, enum: [pending, sent, confirmed, skipped, snoozed, cancelled] }
+  schemas:
+    Job:
+      type: object
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        name: { type: string }
+        rule: { type: string }
+        first_run_at: { type: string, format: date-time }
+        advance_minutes: { type: integer, minimum: 0, maximum: 10080 }
+        channel: { type: string, enum: [telegram], default: telegram }
+        status: { type: string, enum: [active, paused, archived], default: active }
+      required: [name, rule, first_run_at]
+    JobRun:
+      type: object
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        job_id: { type: integer, format: int64 }
+        period_key: { type: string }
+        scheduled_at: { type: string, format: date-time }
+        sent_at: { type: string, format: date-time, nullable: true }
+        status: { type: string, enum: [pending, sent, confirmed, skipped, snoozed, cancelled], default: pending }
+    Confirmation:
+      type: object
+      properties:
+        job_run_id: { type: integer, format: int64 }
+        action: { type: string, enum: [complete, skip, snooze, cancel] }
+        confirmed_at: { type: string, format: date-time }
+        idempotency_key: { type: string }
+        payload: {}
+      required: [job_run_id, action, confirmed_at, idempotency_key]
+    Error:
+      type: object
+      properties: { code: {type: string}, message: {type: string}, details: {} }
+paths:
+  /jobs:
+    post:
+      tags: [scheduler]
+      summary: 创建任务
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Job' }
+      responses:
+        '201':
+          description: 已创建
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotency-Key: { $ref: '#/components/headers/IdempotencyKey' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+    get:
+      tags: [scheduler]
+      summary: 任务列表
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Job' }
+  /job-runs:
+    get:
+      tags: [scheduler]
+      summary: 运行实例（可筛到期）
+      parameters:
+        - $ref: '#/components/parameters/Status'
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/JobRun' }
+  /confirmations:
+    post:
+      tags: [scheduler]
+      summary: 提交回执（完成/跳过/稍后/取消）
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Confirmation' }
+      responses:
+        '201':
+          description: 已创建
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotency-Key: { $ref: '#/components/headers/IdempotencyKey' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Confirmation' }
