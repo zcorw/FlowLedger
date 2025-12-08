@@ -80,3 +80,16 @@
 - 根据需要扩展 `infra/docker-compose.yml`（健康检查、资源限制）
 - 接入 Telegram Bot、OCR、调度等模块，并在 `.env` 中完善对应变量
 
+## 数据库初始化（一次性迁移作业）
+
+- 目的：使用一次性 job 自动执行 `sql/schema/*.sql`，并在存在时加载 `sql/sample/*.sql` 示例数据。
+- 命令：
+  - `cd infra`
+  - `docker compose --env-file ../.env run --rm db-migrate`
+- 说明：
+  - 作业依赖 `db` 健康检查通过后执行；
+  - schema 脚本使用 `CREATE IF NOT EXISTS` 与触发器/索引幂等策略，重复执行安全；
+  - 示例数据目录可选（不存在则跳过）。
+- 常见问题：
+  - 权限/连通性报错：检查 `.env` 中 `POSTGRES_*` 是否与 `db` 服务一致；
+  - Windows 路径映射：确保在 `infra` 目录执行命令并带上 `--env-file ../.env`。

@@ -1,0 +1,15 @@
+目标：实现“可观测与运维最小集”增量（O11）
+范围：
+- 日志：结构化日志（JSON 可选）、`X-Request-Id` 透传；错误分级
+- 指标：基础 HTTP 指标、DB 连接池、任务成功率（/metrics 暴露，Prometheus 兼容）
+- 追踪：预留 OpenTelemetry 接入点（可选）
+- 健康：/healthz（现有）、/readyz（依赖就绪）、/livez（进程存活）
+- 部署：生产 compose/helm 占位，资源/重启策略，蓝绿/滚动建议
+- 文档：运行/排障手册更新
+
+请：
+1) 列出将新增/修改的文件路径树；
+2) 提供中间件/装饰器实现、/metrics 暴露、/readyz 与 /livez、示例 dashboard/alerts（yaml/json 链接或占位）；
+3) 更新部署与运维文档；
+4) 仅改动与本任务直接相关的文件。
+

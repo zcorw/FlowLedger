@@ -1,0 +1,17 @@
+目标：实现“记账写入主线（消费/存款）”最小可用增量（L1）
+范围：
+- SQL：按 docs/sql/modules/expense.sql.md 与 docs/sql/modules/deposit.sql.md 建表与触发器
+- API：
+  - POST /v1/expenses 新增消费（amount, currency, category?, note?, occurred_at）
+  - POST /v1/deposits 新增入账/充值（amount, currency, account, note?, occurred_at）
+  - DELETE /v1/records/{id} 撤销（软删除）
+- 规则：金额 Decimal(20,6)；时间 UTC；用户维度隔离
+- 幂等：写操作要求 `Idempotency-Key`；相同幂等键返回首个结果
+- 测试：新增/撤销/校验失败；cURL 示例
+
+请：
+1) 列出将新增/修改的文件路径树；
+2) 提供迁移脚本、模型、控制器、服务层、测试与 cURL；
+3) 说明与用户/偏好、汇率的集成点（本次可最小化集成，预留钩子）；
+4) 仅改动与本任务直接相关的文件。
+

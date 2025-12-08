@@ -1,15 +1,23 @@
-目标：实现货币与汇率查询/换算基础能力（不接第三方抓取）。
+目标：实现“货币/汇率 + 货币清单管理接口”最小可用增量（C1）
 范围：
-- 表：currencies(code PK, name)、exchange_rates(date, base, quote, rate DECIMAL(20,6), PK(date,base,quote))
-- 路由：
-  GET /v1/currencies
-  GET /v1/exchange-rates?base=USD&quote=JPY&date=2025-10-31
-  POST /v1/convert {amount, from, to, date?} -> {amount_converted}
-- 规则：全部使用 Decimal，量化到 6 位；日期按 UTC；缺失汇率返回 404
+- SQL：按 docs/sql/modules/currency.sql.md 建 schema（schema 名：currency），触发器更新 updated_at
+- API（读）：
+  - GET /v1/currencies 列出支持货币（分页/过滤）
+  - GET /v1/exchange-rates?base=USD&date=2025-01-01 返回该日对 base 的汇率表
+  - POST /v1/convert { amount, from, to, date? } → { amount, rate, converted }
+- API（写，货币清单管理；当前阶段不区分权限，后续可收紧为 write:currency_admin）：
+  - POST /v1/currencies  单条 Upsert（{ code, name, symbol?, scale }）
+  - PATCH /v1/currencies/{code}  更新 name/symbol/scale
+  - PUT /v1/currencies/bulk  批量 Upsert（数组，每项同 POST 规则）
+- 校验：金额 Decimal(20,6)；currency 使用 ISO 4217（A-Z、长度=3）；scale 0..6；date 为 UTC（ISO8601）
+- 幂等：
+  - POST /convert 支持 `Idempotency-Key`（请求级缓存）
+  - 货币清单 Upsert 以 `code` 为唯一键，支持 `Idempotency-Key` 复用响应
+- 测试：覆盖读/写端点的正常与边界；给出 3~5 条 cURL（含 Upsert/批量导入示例）
 
 请：
-1) alembic 迁移 + 回滚
-2) SQLAlchemy/模型与 FastAPI 路由
-3) pytest：表约束、缺失汇率、历史日切、四舍五入规则
-4) 3 条 cURL
-5) 仅改动货币模块相关内容
+1) 列出将新增/修改的文件路径树；
+2) 提供迁移脚本（含回滚）、数据模型、路由、服务层、测试、example cURL；
+3) 说明汇率数据来源策略（可用内置静态表/样例 + 预留 provider 接口）；
+   同时与 SQL 约束对齐（code 主键、scale 范围、updated_at 触发器）。
+4) 仅改动与本任务直接相关的文件。

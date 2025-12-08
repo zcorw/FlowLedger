@@ -1,10 +1,10 @@
-目标：创建最小可用后端/API 与基础设施基线。
+目标：创建最小可用后端 API 与基础设施基线
 范围：
 - 语言 Python，框架 FastAPI
 - 新增 /healthz 返回 {"ok": true}
-- /infra/docker-compose.yml：postgres + api 服务；api 读取 .env
-- alembic 初始化（先不建表）
-- tests/test_healthz.py 覆盖 200/响应体
+- infra/docker-compose.yml：postgres + api 服务；api 读取 .env
+- Alembic 初始化（先不建表）
+- tests/test_healthz.py 覆盖 200/响应
 - CI：格式/静态检查 + 单测
 
 请：
@@ -12,3 +12,4 @@
 2) 新建 `.env.example`：DATABASE_URL, DEFAULT_CURRENCY, DEFAULT_TIMEZONE, BOT_TOKEN
 3) 提供 `docker compose up -d` 与 `pytest -q` 的冒烟步骤
 4) 仅改动与本任务直接相关的文件
+

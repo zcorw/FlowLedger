@@ -1,6 +1,15 @@
-目标：查询/汇总/导出。
+目标：实现“查询/汇总/导出”最小可用增量（Q1）
 范围：
-- 路由：GET /v1/expenses?from=..&to=..&category=.., GET /v1/deposits?...,
-- 路由：GET /v1/summary?range=month&currency=JPY（内部统一换算显示货币）
-- 路由：GET /v1/export.csv?range=month
-请：高效分页，基本索引；pytest：筛选/分页/汇总正确性；导出 CSV 的内容断言。
+- API：
+  - GET /v1/expenses?from=&to=&category= 支出查询（分页/排序）
+  - GET /v1/deposits?from=&to= 入账查询（分页/排序）
+  - GET /v1/summary?period=month&currency=CNY 汇总（按默认或指定货币）
+  - GET /v1/export.csv?from=&to= 导出 CSV（按筛选条件）
+- 统一规则：UTC 时间过滤；金额 Decimal；游标/页码分页二选一
+- 测试：查询/汇总/导出的 happy path 与边界
+
+请：
+1) 列出将新增/修改的文件路径树；
+2) 提供查询路由、过滤/排序实现、汇总逻辑（聚合/换算）、CSV 生成、测试与 cURL；
+3) 仅改动与本任务直接相关的文件。
+

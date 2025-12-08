@@ -1,0 +1,18 @@
+目标：实现“用户与偏好（含 Telegram 绑定）”最小可用增量（U1）
+范围：
+- SQL：按 docs/sql/modules/user.sql.md 建 "user".users 表（含 telegram_user_id 可空唯一、is_bot_enabled 等）
+- API：
+  - POST /v1/users 注册（返回 user + 默认偏好）
+  - GET /v1/users/me 当前用户信息
+  - PATCH /v1/users/me/preferences 更新 base_currency、timezone、language
+  - POST /v1/users/link-telegram 绑定（可带 link_token；按 telegram_user_id 幂等）
+- 校验：IANA 时区、ISO 4217、BCP47 语言
+- 幂等：写操作支持 `Idempotency-Key`；重复绑定返回 409
+- 测试：覆盖主要 happy path 与冲突/校验失败
+
+请：
+1) 列出将新增/修改的文件路径树；
+2) 提供迁移脚本、模型、路由/控制器、偏好校验、测试与 cURL；
+3) 说明鉴权占位方案（本里程可用简化 mock/fixture 获取 user）；
+4) 仅改动与本任务直接相关的文件。
+

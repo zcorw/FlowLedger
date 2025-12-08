@@ -1,6 +1,16 @@
-目标：定时提醒。
+目标：实现“定时提醒/自动记账回执”最小可用增量（S1）
 范围：
-- 表：reminder_tasks(id, user_id, cron, enabled, payload JSONB, created_at_utc)；执行实例表可选
-- 扫描器：每分钟检查到点任务，推送 Bot 提醒卡片；用户确认后生成记录（复用 L1）
-- 命令：/remind add|list|on|off
-请：模块边界清晰；cron 解析选择成熟库；pytest：到点触发、开关生效；幂等保障。
+- SQL：按 docs/sql/modules/scheduler.sql.md 建表与触发器
+- API：
+  - POST /v1/jobs 创建提醒任务（title, schedule/cron, channel=telegram）
+  - POST /v1/confirmations 回执（用于触发自动记账：与 L1 集成）
+  - GET /v1/job-runs 查询任务实例/历史
+- Worker：最小扫描器（按 schedule 生成实例并下发到 Bot）
+- Bot：接收提醒卡片的回调并展示“一键入账”按钮
+- 测试：任务创建/扫描/回执的关键 happy path
+
+请：
+1) 列出将新增/修改的文件路径树；
+2) 提供迁移脚本、API 路由、扫描器任务（可定时触发/手动命令）、Bot 回调、测试与 cURL；
+3) 仅改动与本任务直接相关的文件。
+

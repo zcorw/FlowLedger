@@ -1,10 +1,15 @@
-目标：Telegram Bot 最小可用（轮询）。
+目标：实现“Telegram Bot 最小可用”增量（B1）
 范围：
-- 命令：/start /help /me /set currency|timezone|lang
-- 环境：从 .env 读取 BOT_TOKEN、API_BASE_URL
-- 行为：命令参数解析、调用后端 /v1/users/... 接口同步偏好；记录结构化日志；简单限流。
+- Bot: Python（aiogram/pyTelegramBotAPI 任选其一），读取 `BOT_TOKEN`
+- 核心命令：/start, /help, /me, /link <token>, /set currency|timezone|lang
+- 与 API 对接：调用 /v1/users/link-telegram、/v1/users/me、/v1/users/me/preferences
+- 运行模式：本地 Polling；生产预留 Webhook（`WEBHOOK_URL`）
+- Docker：新增 bot 的 Dockerfile 与 compose 服务，env 从 .env 读取
+- 测试：命令解析与参数校验（可用单元测试对解析层）
 
 请：
-- 提供 bot 启动脚本与 README 片段（如何本地运行与配置）
-- 为每个命令提供 1~2 条交互示例（输入/输出）
-- pytest：命令解析单测（可对 API 调用打桩）
+1) 列出将新增/修改的文件路径树；
+2) 提供 Bot 启动脚本、命令路由、与 API 的最小对接封装、Dockerfile 与 compose 片段；
+3) 给出 runbook：本地 Polling 启动、Webhook 配置；
+4) 仅改动与本任务直接相关的文件。
+

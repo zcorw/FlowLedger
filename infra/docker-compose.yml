@@ -22,6 +22,54 @@ services:
     networks:
       - backend
 
+  db-migrate:
+    image: postgres:12-alpine
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-flow_ledger}
+      POSTGRES_USER: ${POSTGRES_USER:-flow_ledger}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flow_ledger}
+    volumes:
+      - ../:/work:ro
+    working_dir: /work
+    entrypoint: ["/bin/sh","-lc"]
+    command: >-
+      'set -e;
+       echo "Applying SQL schemas (deterministic order)...";
+       apply() { echo "==> $$1"; PGPASSWORD=$$POSTGRES_PASSWORD psql -h db -U $$POSTGRES_USER -d $$POSTGRES_DB -v ON_ERROR_STOP=1 -f "$$1"; };
+       # Enforce dependency order: user -> currency -> deposit -> expense -> loan -> scheduler
+       for f in \
+         /work/sql/schema/user.sql \
+         /work/sql/schema/currency.sql \
+         /work/sql/schema/deposit.sql \
+         /work/sql/schema/expense.sql \
+         /work/sql/schema/loan.sql \
+         /work/sql/schema/scheduler.sql; do \
+           [ -f "$$f" ] && apply "$$f" || true; \
+       done; \
+       # Apply any remaining *.sql not covered above (extensions, views, etc.)
+       for f in /work/sql/schema/*.sql; do \
+         case "$$f" in \
+           */user.sql|*/currency.sql|*/deposit.sql|*/expense.sql|*/loan.sql|*/scheduler.sql) continue;; \
+         esac; \
+         apply "$$f"; \
+       done; \
+       if ls /work/sql/sample/*.sql >/dev/null 2>&1; then \
+         echo "Applying sample data..."; \
+         for f in /work/sql/sample/*.sql; do \
+           apply "$$f"; \
+         done; \
+       else \
+         echo "No sample data found (sql/sample)."; \
+       fi; \
+       echo "Database migration job completed."'
+    networks:
+      - backend
+
   api:
     build:
       context: ..
@@ -37,6 +85,8 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "8000:8000"
+    volumes:
+      - ../api:/app
     networks:
       - backend
 
@@ -47,4 +97,3 @@ volumes:
 networks:
   backend:
     driver: bridge
-

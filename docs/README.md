@@ -1,68 +1,49 @@
-# Flow-Ledger 系统设计总览
+# Flow-Ledger 文档总览
 
-## 1. 目标与范围
-Flow-Ledger 致力于提供统一的多币种个人资产管理能力，通过 Telegram Bot 作为主要交互入口，支撑存款、消费、借贷等全生命周期记录与分析，并支持定时提醒与自动记账。
+本目录汇总项目的用户指南、API 说明、SQL 设计、模块设计与部署运维文档，帮助你快速上手与持续迭代。
 
-- 技术栈：Python（FastAPI/Flask）、PostgreSQL 12+、Docker、Telegram Bot
-- 关键能力：多币种统一换算、历史汇率与时间序列查询、数据一致性与幂等、UTC 时间与 DECIMAL 精度、定时提醒与自动记账
+## 快速开始
+- 本地/生产环境搭建：`docs/deploy/environment_setup.md`
+- F0 基线（最小可用 API + 基础设施）：`docs/deploy/f0_baseline_setup.md`
 
-## 2. 架构原则
-- 模块化与低耦合：模块内聚、跨模块通过明确接口交互
-- 数据一致性优先：幂等键、事务边界清晰、事件/日志可追溯
-- 可观测性：指标、日志、追踪统一规范
-- 性能与可扩展：读写分离可拓展、任务异步化、缓存与限流
-- 安全性：最小权限、数据加密、访问控制与审计
-- 时间与精度：统一 UTC 时间、金额 DECIMAL(20,6)
+## 用户指南
+- Telegram Bot 使用指南：`docs/guide/telegram_bot.md`
+- 收据上传（OCR）自动记账：`docs/guide/receipt_ocr.md`
+- 获取 BOT_TOKEN（BotFather 操作）：`docs/guide/bot_token.md`
 
-## 3. 模块划分与索引
-- 货币管理模块：docs/modules/currency/Design.md
-- 用户管理模块：docs/modules/user/Design.md
-- 存款管理模块：docs/modules/deposit/Design.md
-- 消费管理模块：docs/modules/expense/Design.md
-- 借贷管理模块：docs/modules/loan/Design.md
-- 定时通知任务模块：docs/modules/scheduler/Design.md
+## API 说明
+- 总览：`docs/api/README.md`
+- 模块接口：
+  - 货币（currency）：`docs/api/modules/currency.md`
+  - 用户（user）：`docs/api/modules/user.md`
+  - 存款（deposit）：`docs/api/modules/deposit.md`
+  - 消费（expense）：`docs/api/modules/expense.md`
+  - 借贷（loan）：`docs/api/modules/loan.md`
+  - 定时任务（scheduler）：`docs/api/modules/scheduler.md`
 
-## 4. 全局设计假设与待确认点
-- 假设
-  - Telegram 为唯一交互入口；后续可扩展 Web/Admin
-  - 汇率默认来源单一（可配置），允许离线/缓存回退
-  - 货币与金额统一使用 DECIMAL(20,6)，不使用浮点
-  - 所有事件时间戳存储为 UTC
-  - 记账采用单表单向记账模型；双重记账可作为未来增强
-- 待确认
-  - 是否需要支持多用户共享账户/家庭账本
-  - 汇率来源供应商与更新频率
-  - 是否引入消息总线（如 Redis/RabbitMQ）以提升异步能力
-  - 预算、报警阈值、自动分类等高级能力优先级
+## SQL 说明（PostgreSQL 12+）
+- 总览与规范：`docs/sql/README.md`
+- 模块 DDL 与说明：
+  - 货币 schema：`docs/sql/modules/currency.sql.md`
+  - 用户 schema：`docs/sql/modules/user.sql.md`
+  - 存款 schema：`docs/sql/modules/deposit.sql.md`
+  - 消费 schema：`docs/sql/modules/expense.sql.md`
+  - 借贷 schema：`docs/sql/modules/loan.sql.md`
+  - 定时任务 schema：`docs/sql/modules/scheduler.sql.md`
 
-## 5. 系统非功能需求
-- 性能
-  - 汇率查询 P95 < 50ms（缓存命中），< 300ms（远端）
-  - 消费/存款写入 P95 < 150ms（本地事务）
-  - 定时任务扫描与下发延迟 < 1 分钟
-- 安全
-  - 传输层 TLS、存储层敏感字段加密（如 API Token）
-  - 最小权限的数据库账号，分离读写权限
-  - 审计日志：登录、敏感操作、批处理
-- 备份
-  - 每日全量备份 + 每小时增量，保留 30 天
-  - 灾备演练：季度演练数据恢复
-- 监控
-  - 业务指标：净资产计算延迟、汇率新鲜度、定时任务成功率
-  - 技术指标：CPU/内存、DB 连接池、慢查询、队列积压
+## 模块设计（Design）
+- 货币：`docs/modules/currency/Design.md`
+  - ExchangeRate-API 定时拉取说明：`docs/modules/currency/ExchangeRate-API.md`
+- 用户：`docs/modules/user/Design.md`
+- 存款：`docs/modules/deposit/Design.md`
+- 消费：`docs/modules/expense/Design.md`
+- 借贷：`docs/modules/loan/Design.md`
+- 定时任务：`docs/modules/scheduler/Design.md`
 
-## 6. 实施检查清单
-- 数据一致性
-  - 事务边界明确、外键/唯一键/检查约束齐备
-  - 幂等键：外部回调、批量导入、定时任务实例
-- 幂等性
-  - API 接口支持 `Idempotency-Key`
-  - 回调/定时任务以（任务ID+周期窗口）作为幂等键
-- 日志
-  - 结构化日志，关键信息包含 trace_id/user_id/module
-  - 错误分级与告警阈值
-- 时区
-  - 所有持久化 UTC，显示时按用户时区转换
-- 测试覆盖率
-  - 单元>70%，关键路径>85%（转换/记账/调度/回调）
+## 约定与原则（摘）
+- 技术栈：Python（FastAPI）、PostgreSQL 12+、Docker、Telegram Bot
+- 金额与时间：金额使用 DECIMAL（避免浮点），时间统一 UTC 存储，展示按用户时区
+- 一致性与幂等：关键写操作支持 `Idempotency-Key`；触发/任务按业务幂等键去重
+- 观测性与安全：结构化日志、指标与追踪；最小权限、加密传输、备份与灾备
 
+如需新增文档或更新导航，请保持上述结构与命名一致，便于快速定位模块与资源。

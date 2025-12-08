@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from dotenv import load_dotenv
+from .routers import currency
 
 
 # Load environment variables from .env if present
@@ -12,3 +13,5 @@ app = FastAPI(title="Flow-Ledger API (Baseline)")
 def healthz():
     return {"ok": True}
 
+
+app.include_router(currency.router)
