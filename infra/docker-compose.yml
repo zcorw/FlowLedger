@@ -90,8 +90,52 @@ services:
     networks:
       - backend
 
+  bot:
+    build:
+      context: ..
+      dockerfile: bot/Dockerfile
+    depends_on:
+      api:
+        condition: service_started
+    env_file:
+      - ../.env
+    environment:
+      API_BASE_URL: ${API_BASE_URL:-http://api:8000/v1}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      BOT_STATE_PATH: ${BOT_STATE_PATH:-/app/data/bot_state.json}
+    ports:
+      - "9080:7000"
+    restart: unless-stopped
+    volumes:
+      - ../bot:/app
+      - botdata:/app/data
+    networks:
+      - backend
+
+  scheduler:
+    build:
+      context: ..
+      dockerfile: api/Dockerfile
+    depends_on:
+      api:
+        condition: service_started
+    env_file:
+      - ../.env
+    environment:
+      API_BASE_URL: ${API_BASE_URL:-http://api:8000/v1}
+      FX_CRON_SCHEDULE: ${FX_CRON_SCHEDULE:-0 9 * * *}
+      FX_TIMEOUT_SECONDS: ${FX_TIMEOUT_SECONDS:-10}
+      FX_SYNC_ON_START: ${FX_SYNC_ON_START:-false}
+    command: python -m app.tasks.scheduler_service
+    volumes:
+      - ../api:/app
+    networks:
+      - backend
+
 volumes:
   pgdata:
+    driver: local
+  botdata:
     driver: local
 
 networks:

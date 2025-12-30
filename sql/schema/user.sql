@@ -40,10 +40,9 @@ ON "user".users (telegram_user_id);
 INSERT INTO "user".users(telegram_user_id) VALUES (NULL) ON CONFLICT DO NOTHING;
 
 INSERT INTO "user".user_prefs(user_id, base_currency, timezone, language)
-SELECT u.id, 'USD', 'UTC', 'zh-CN'
+SELECT u.id, 'CNY', 'Asia/Shanghai', 'zh-CN'
 FROM "user".users u
 WHERE NOT EXISTS (
   SELECT 1 FROM "user".user_prefs p WHERE p.user_id = u.id
 )
 LIMIT 1;
-

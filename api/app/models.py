@@ -1,7 +1,18 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from sqlalchemy import CheckConstraint, Column, Date, DateTime, Numeric, String, Integer, BigInteger
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    Date,
+    DateTime,
+    Numeric,
+    String,
+    Integer,
+    BigInteger,
+    Boolean,
+    ForeignKey,
+)
 from sqlalchemy import Index
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
@@ -39,3 +50,40 @@ class ExchangeRate(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     # index defined in __table_args__
+
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (
+        {"schema": "user"},
+    )
+
+    _id_type = BigInteger().with_variant(Integer, "sqlite")
+
+    id: Mapped[int] = mapped_column(_id_type, primary_key=True, autoincrement=True)
+    telegram_user_id: Mapped[int | None] = mapped_column(BigInteger, unique=True, nullable=True)
+    is_bot_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class UserPreference(Base):
+    __tablename__ = "user_prefs"
+    __table_args__ = (
+        {"schema": "user"},
+    )
+
+    _id_type = BigInteger().with_variant(Integer, "sqlite")
+
+    id: Mapped[int] = mapped_column(_id_type, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        _id_type,
+        ForeignKey("user.users.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    base_currency: Mapped[str] = mapped_column(String, nullable=False)
+    timezone: Mapped[str] = mapped_column(String, nullable=False)
+    language: Mapped[str] = mapped_column(String, nullable=False, default="zh-CN")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

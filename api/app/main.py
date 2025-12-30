@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from dotenv import load_dotenv
-from .routers import currency
+from .routers import currency, user
 
 
 # Load environment variables from .env if present
@@ -15,3 +15,4 @@ def healthz():
 
 
 app.include_router(currency.router)
+app.include_router(user.router)

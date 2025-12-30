@@ -61,3 +61,4 @@ docs/_build/
 # ---- Secrets (if used locally) ----
 secrets/
 
+frpc.ini

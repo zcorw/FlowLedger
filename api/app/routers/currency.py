@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
 from ..models import Currency, ExchangeRate
+from ..tasks.fetch_fx import sync_exchange_rates
 
 
 router = APIRouter(prefix="/v1", tags=["currency"])
@@ -40,6 +41,7 @@ class PageOut(BaseModel):
     items: List[CurrencyOut]
 
 
+# List currencies with pagination, optional filtering, and sorting.
 @router.get("/currencies", response_model=PageOut)
 def list_currencies(
     page: int = Query(1, ge=1),
@@ -81,6 +83,7 @@ def list_currencies(
     }
 
 
+# Retrieve a single currency by code or return 404 if missing.
 @router.get("/currencies/{code}", response_model=CurrencyOut)
 def get_currency(code: str, db: Session = Depends(get_db)):
     cur = db.get(Currency, code.upper())
@@ -97,6 +100,7 @@ class ExchangeRateOut(BaseModel):
     effective_date: Optional[str] = None
 
 
+# Fetch the latest exchange rate(s) for a base currency, optionally for a specific quote.
 @router.get("/exchange-rates")
 def get_exchange_rates(
     base: str = Query(..., min_length=3, max_length=3),
@@ -169,6 +173,15 @@ def get_exchange_rates(
         return {"base": base, "date": qdate.isoformat(), "rates": rates}
 
 
+# Trigger an on-demand FX sync from fawazahmed0/exchange-api using the configured base.
+@router.post("/exchange-rates/sync")
+def sync_exchange_rates_now(db: Session = Depends(get_db)):
+    try:
+        return sync_exchange_rates(db)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class ConvertRequest(BaseModel):
     amount: Decimal = Field(...)
     from_currency: str = Field(..., min_length=3, max_length=3, alias="from")
@@ -192,6 +205,7 @@ class ConvertResponse(BaseModel):
 _idem_cache: Dict[str, Dict[str, Any]] = {}
 
 
+# Convert an amount between currencies using the latest rate up to the requested date.
 @router.post("/convert", response_model=ConvertResponse)
 def convert_amount(req: Request, body: ConvertRequest, db: Session = Depends(get_db)):
     # Idempotency-Key simple process-local cache
@@ -260,6 +274,7 @@ class CurrencyUpsert(BaseModel):
         return v
 
 
+# Create or replace a currency definition by code.
 @router.post("/currencies", response_model=CurrencyOut)
 def upsert_currency(payload: CurrencyUpsert, db: Session = Depends(get_db)):
     code = payload.code
@@ -282,6 +297,7 @@ class CurrencyPatch(BaseModel):
     scale: Optional[int] = None
 
 
+# Partially update currency fields by code.
 @router.patch("/currencies/{code}", response_model=CurrencyOut)
 def patch_currency(code: str, payload: CurrencyPatch, db: Session = Depends(get_db)):
     cur = db.get(Currency, code.upper())
@@ -300,6 +316,7 @@ def patch_currency(code: str, payload: CurrencyPatch, db: Session = Depends(get_
     return cur
 
 
+# Bulk create or update currencies and report per-item status.
 @router.put("/currencies/bulk")
 def bulk_upsert(items: List[CurrencyUpsert], db: Session = Depends(get_db)):
     results = []
