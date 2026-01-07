@@ -41,6 +41,11 @@
 - `/set currency <ISO4217>` 更新默认货币。
 - `/set timezone <IANA>` 更新时区。
 - `/set lang <BCP47>` 更新语言。
+- `/cat_add <name>` 创建消费分类（POST /v1/categories，建议带 Idempotency-Key）。
+- `/cat_list` 查看分类列表（GET /v1/categories）。
+- `/exp_add <amount> <currency> <occurred_at> [category_id] [merchant] [note]` 记一笔消费（POST /v1/expenses，occurred_at 用 UTC ISO8601，amount 最多 6 位小数）。
+- `/exp_list [from] [to] [page] [page_size]` 查看消费历史（GET /v1/expenses，按 occurred_at 倒序）。
+> 以上四条为 L1 记账接口对应指令，需在 handlers/service 中补充解析并附带 X-User-Id 与随机 Idempotency-Key。
 
 ## 6) 常见操作与排障
 - 查看日志：`docker compose logs -f bot` 或本地控制台输出。

@@ -32,6 +32,13 @@
   - PowerShell：`$env:PYTHONPATH='api'; pytest -q`
   - Bash/Zsh：`PYTHONPATH=api pytest -q`
 
+## 数据库字段/DDL 变更
+- 将需要的 `ALTER TABLE ... ADD COLUMN ...` 写入 `scripts/run_migration.sql`（建议使用 `ADD COLUMN IF NOT EXISTS` 方便重复执行）。
+- 执行迁移（默认数据库服务名 `db`，读取 `.env` 中的 PG 配置）：
+  - Linux/macOS：`docker compose --env-file .env exec -T db psql -U $POSTGRES_USER -d $POSTGRES_DB -f - < scripts/run_migration.sql`
+  - Windows PowerShell：`Get-Content scripts\run_migration.sql | docker compose --env-file .env exec -T db psql -U $Env:POSTGRES_USER -d $Env:POSTGRES_DB -f -`
+- 如列已存在，`IF NOT EXISTS` 可避免报错；执行后请同步更新 `sql/schema/*.sql` 或 Alembic 迁移，保持环境一致。
+
 ## 文档
 - 用户指南：`docs/guide/telegram_bot.md`（Bot 使用）、`docs/guide/receipt_ocr.md`（OCR 记账）
 - 环境/部署：`docs/deploy/f0_baseline_setup.md`

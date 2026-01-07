@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS deposit.institutions (
   CONSTRAINT ck_institutions__type CHECK (type IN ('bank','broker','other'))
 );
 
+DROP TRIGGER IF EXISTS trg_institutions__upd ON deposit.institutions;
 CREATE TRIGGER trg_institutions__upd
 BEFORE UPDATE ON deposit.institutions
 FOR EACH ROW EXECUTE FUNCTION deposit.tg_set_updated_at();
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS deposit.accounts (
 CREATE INDEX IF NOT EXISTS idx_accounts__user_id ON deposit.accounts(user_id);
 CREATE INDEX IF NOT EXISTS idx_accounts__institution_id ON deposit.accounts(institution_id);
 
+DROP TRIGGER IF EXISTS trg_accounts__upd ON deposit.accounts;
 CREATE TRIGGER trg_accounts__upd
 BEFORE UPDATE ON deposit.accounts
 FOR EACH ROW EXECUTE FUNCTION deposit.tg_set_updated_at();
@@ -55,6 +57,7 @@ CREATE TABLE IF NOT EXISTS deposit.account_balances (
 CREATE INDEX IF NOT EXISTS idx_account_balances__as_of_desc
 ON ONLY deposit.account_balances (as_of DESC);
 
+DROP TRIGGER IF EXISTS trg_account_balances__upd ON deposit.account_balances;
 CREATE TRIGGER trg_account_balances__upd
 BEFORE UPDATE ON deposit.account_balances
 FOR EACH ROW EXECUTE FUNCTION deposit.tg_set_updated_at();
@@ -70,4 +73,3 @@ ON CONFLICT DO NOTHING;
 INSERT INTO deposit.account_balances(account_id, amount, as_of)
 SELECT a.id, 1000.00, now() FROM deposit.accounts a
 LIMIT 1;
-

@@ -31,7 +31,9 @@ def client():
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    engine = engine.execution_options(schema_translate_map={"currency": None, "user": None})
+    engine = engine.execution_options(
+        schema_translate_map={"currency": None, "user": None, "expense": None}
+    )
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
     with engine.begin() as conn:
         conn.exec_driver_sql("PRAGMA foreign_keys=ON")
@@ -59,28 +61,65 @@ def client():
 
 def test_register_user_returns_defaults(client):
     test_client, _session = client
-    resp = test_client.post("/v1/users", headers={"Idempotency-Key": "abc"})
+    resp = test_client.post(
+        "/v1/auth/register",
+        headers={"Idempotency-Key": "abc"},
+        json={"username": "alice", "password": "strongpass123"},
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["user"]["id"] > 0
+    assert data["user"]["username"] == "alice"
     assert data["preferences"]["base_currency"] == user_router.DEFAULT_BASE_CURRENCY
     assert data["preferences"]["timezone"] == user_router.DEFAULT_TIMEZONE
     assert data["preferences"]["language"] == user_router.DEFAULT_LANGUAGE
+    assert data["access_token"]
 
-    resp2 = test_client.post("/v1/users", headers={"Idempotency-Key": "abc"})
+    resp2 = test_client.post(
+        "/v1/auth/register",
+        headers={"Idempotency-Key": "abc"},
+        json={"username": "alice", "password": "strongpass123"},
+    )
     assert resp2.status_code == 201
     assert resp2.json() == data
 
 
+def test_login_with_credentials(client):
+    test_client, session = client
+    test_client.post(
+        "/v1/auth/register",
+        json={"username": "bob", "password": "strongpass123"},
+    )
+
+    resp_ok = test_client.post(
+        "/v1/auth/login",
+        json={"username": "bob", "password": "strongpass123"},
+    )
+    assert resp_ok.status_code == 200
+    token = resp_ok.json()["access_token"]
+    assert token
+
+    resp_bad = test_client.post(
+        "/v1/auth/login",
+        json={"username": "bob", "password": "wrongpass"},
+    )
+    assert resp_bad.status_code == 401
+
+
 def test_update_preferences_validation(client):
     test_client, session = client
-    u = test_client.post("/v1/users").json()["user"]
+    reg = test_client.post(
+        "/v1/auth/register",
+        json={"username": "cindy", "password": "strongpass123"},
+    ).json()
+    token = reg["access_token"]
+    u = reg["user"]
     _seed_currency(session, "CNY")
 
     # valid update
     resp = test_client.patch(
         "/v1/users/me/preferences",
-        headers={"X-User-Id": str(u["id"])},
+        headers={"Authorization": f"Bearer {token}"},
         json={"base_currency": "CNY", "timezone": "Asia/Shanghai", "language": "zh-CN"},
     )
     assert resp.status_code == 200
@@ -89,7 +128,7 @@ def test_update_preferences_validation(client):
     # invalid timezone
     resp_bad_tz = test_client.patch(
         "/v1/users/me/preferences",
-        headers={"X-User-Id": str(u["id"])},
+        headers={"Authorization": f"Bearer {token}"},
         json={"timezone": "Not/AZone"},
     )
     assert resp_bad_tz.status_code == 422
@@ -97,7 +136,7 @@ def test_update_preferences_validation(client):
     # invalid currency not in table
     resp_bad_cur = test_client.patch(
         "/v1/users/me/preferences",
-        headers={"X-User-Id": str(u["id"])},
+        headers={"Authorization": f"Bearer {token}"},
         json={"base_currency": "ZZZ"},
     )
     assert resp_bad_cur.status_code == 422

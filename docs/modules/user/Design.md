@@ -75,3 +75,8 @@
 ### 8. 模块扩展与未来优化方向
 - 支持多身份提供方、团队/家庭共享、SAML/OIDC（后续）
 
+### 9. 账号密码登录补充
+- 数据库：`users` 表新增 `username`（唯一，可空）、`password_hash`、`password_salt`、`last_login_at` 字段，兼容原有 Telegram 绑定，历史数据无需修改即可保留。
+- 密码：最少 8 位，使用 PBKDF2-SHA256 + 随机 salt（迭代次数可配置）生成哈希，仅存储哈希与 salt。
+- 接口：新增 `/v1/auth/register`（用户名+密码+可选偏好，支持幂等键）和 `/v1/auth/login`（用户名+密码）。成功返回 Bearer `access_token`、`expires_in`、用户信息与偏好。
+- 认证：服务端以 HMAC(secret) 签发 token，包含过期时间；后端优先从 `Authorization: Bearer <token>` 解析用户，兼容 `X-User-Id` 头以便旧流程与测试。
