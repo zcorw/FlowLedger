@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS "user".users (
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+DROP TRIGGER IF EXISTS trg_users__upd ON "user".users;
 CREATE TRIGGER trg_users__upd
 BEFORE UPDATE ON "user".users
 FOR EACH ROW EXECUTE FUNCTION "user".tg_set_updated_at();
@@ -34,6 +35,7 @@ CREATE TABLE IF NOT EXISTS "user".user_prefs (
   CONSTRAINT ck_user_prefs__tz CHECK (length(timezone) BETWEEN 1 AND 64)
 );
 
+DROP TRIGGER IF EXISTS trg_user_prefs__upd ON "user".user_prefs;
 CREATE TRIGGER trg_user_prefs__upd
 BEFORE UPDATE ON "user".user_prefs
 FOR EACH ROW EXECUTE FUNCTION "user".tg_set_updated_at();

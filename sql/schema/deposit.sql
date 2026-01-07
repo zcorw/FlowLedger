@@ -48,14 +48,14 @@ CREATE TABLE IF NOT EXISTS deposit.account_balances (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_account_balances__account_asof UNIQUE (account_id, as_of),
   CONSTRAINT ck_account_balances__amount_nonneg CHECK (amount >= 0)
-) PARTITION BY RANGE (as_of);
+);
 
 -- Optional monthly partition example (create as needed)
 -- CREATE TABLE deposit.account_balances_2025_01 PARTITION OF deposit.account_balances
 -- FOR VALUES FROM ('2025-01-01') TO ('2025-02-01');
 
 CREATE INDEX IF NOT EXISTS idx_account_balances__as_of_desc
-ON ONLY deposit.account_balances (as_of DESC);
+ON deposit.account_balances (as_of DESC);
 
 DROP TRIGGER IF EXISTS trg_account_balances__upd ON deposit.account_balances;
 CREATE TRIGGER trg_account_balances__upd

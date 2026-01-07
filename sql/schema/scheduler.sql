@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS scheduler.jobs (
 
 CREATE INDEX IF NOT EXISTS idx_jobs__user_id ON scheduler.jobs(user_id);
 
+DROP TRIGGER IF EXISTS trg_jobs__upd ON scheduler.jobs;
 CREATE TRIGGER trg_jobs__upd
 BEFORE UPDATE ON scheduler.jobs
 FOR EACH ROW EXECUTE FUNCTION scheduler.tg_set_updated_at();
@@ -39,15 +40,16 @@ CREATE TABLE IF NOT EXISTS scheduler.job_runs (
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_job_runs__job_period UNIQUE (job_id, period_key),
   CONSTRAINT ck_job_runs__status CHECK (status IN ('pending','sent','confirmed','skipped','snoozed','cancelled'))
-) PARTITION BY RANGE (scheduled_at);
+);
 
 -- Optional partition example
 -- CREATE TABLE scheduler.job_runs_2025_01 PARTITION OF scheduler.job_runs
 -- FOR VALUES FROM ('2025-01-01') TO ('2025-02-01');
 
 CREATE INDEX IF NOT EXISTS idx_job_runs__job_scheduled
-ON ONLY scheduler.job_runs (job_id, scheduled_at);
+ON scheduler.job_runs (job_id, scheduled_at);
 
+DROP TRIGGER IF EXISTS trg_job_runs__upd ON scheduler.job_runs;
 CREATE TRIGGER trg_job_runs__upd
 BEFORE UPDATE ON scheduler.job_runs
 FOR EACH ROW EXECUTE FUNCTION scheduler.tg_set_updated_at();
@@ -61,6 +63,7 @@ CREATE TABLE IF NOT EXISTS scheduler.reminders (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+DROP TRIGGER IF EXISTS trg_reminders__upd ON scheduler.reminders;
 CREATE TRIGGER trg_reminders__upd
 BEFORE UPDATE ON scheduler.reminders
 FOR EACH ROW EXECUTE FUNCTION scheduler.tg_set_updated_at();
@@ -81,6 +84,7 @@ CREATE TABLE IF NOT EXISTS scheduler.confirmations (
 CREATE INDEX IF NOT EXISTS idx_confirmations__run_confirmed
 ON scheduler.confirmations (job_run_id, confirmed_at DESC);
 
+DROP TRIGGER IF EXISTS trg_confirmations__upd ON scheduler.confirmations;
 CREATE TRIGGER trg_confirmations__upd
 BEFORE UPDATE ON scheduler.confirmations
 FOR EACH ROW EXECUTE FUNCTION scheduler.tg_set_updated_at();
@@ -98,4 +102,3 @@ LIMIT 1;
 INSERT INTO scheduler.reminders(job_run_id, sent_at)
 SELECT r.id, now() FROM scheduler.job_runs r
 LIMIT 1;
-

@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS loan.counterparties (
   CONSTRAINT uq_counterparties__name UNIQUE (name)
 );
 
+DROP TRIGGER IF EXISTS trg_counterparties__upd ON loan.counterparties;
 CREATE TRIGGER trg_counterparties__upd
 BEFORE UPDATE ON loan.counterparties
 FOR EACH ROW EXECUTE FUNCTION loan.tg_set_updated_at();
@@ -42,6 +43,7 @@ CREATE TABLE IF NOT EXISTS loan.loans (
 
 CREATE INDEX IF NOT EXISTS idx_loans__user_id ON loan.loans(user_id);
 
+DROP TRIGGER IF EXISTS trg_loans__upd ON loan.loans;
 CREATE TRIGGER trg_loans__upd
 BEFORE UPDATE ON loan.loans
 FOR EACH ROW EXECUTE FUNCTION loan.tg_set_updated_at();
@@ -63,6 +65,7 @@ CREATE TABLE IF NOT EXISTS loan.loan_schedules (
 CREATE INDEX IF NOT EXISTS idx_loan_schedules__due_date
 ON loan.loan_schedules (due_date);
 
+DROP TRIGGER IF EXISTS trg_loan_schedules__upd ON loan.loan_schedules;
 CREATE TRIGGER trg_loan_schedules__upd
 BEFORE UPDATE ON loan.loan_schedules
 FOR EACH ROW EXECUTE FUNCTION loan.tg_set_updated_at();
@@ -77,15 +80,16 @@ CREATE TABLE IF NOT EXISTS loan.loan_txns (
   fee_paid       NUMERIC(20,6) NOT NULL DEFAULT 0,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
-) PARTITION BY RANGE (paid_at);
+);
 
 -- Optional partition example
 -- CREATE TABLE loan.loan_txns_2025_01 PARTITION OF loan.loan_txns
 -- FOR VALUES FROM ('2025-01-01') TO ('2025-02-01');
 
 CREATE INDEX IF NOT EXISTS idx_loan_txns__loan_paid_at
-ON ONLY loan.loan_txns (loan_id, paid_at DESC);
+ON loan.loan_txns (loan_id, paid_at DESC);
 
+DROP TRIGGER IF EXISTS trg_loan_txns__upd ON loan.loan_txns;
 CREATE TRIGGER trg_loan_txns__upd
 BEFORE UPDATE ON loan.loan_txns
 FOR EACH ROW EXECUTE FUNCTION loan.tg_set_updated_at();
@@ -102,4 +106,3 @@ ON CONFLICT DO NOTHING;
 INSERT INTO loan.loan_schedules(loan_id, period_no, due_date, principal_due, interest_due)
 SELECT l.id, 1, now() + interval '30 days', 800.00, 50.00
 FROM loan.loans l LIMIT 1;
-

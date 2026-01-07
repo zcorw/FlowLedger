@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS currency.currencies (
   CONSTRAINT ck_currencies__scale CHECK (scale BETWEEN 0 AND 6)
 );
 
+DROP TRIGGER IF EXISTS trg_currencies__upd ON currency.currencies;
 CREATE TRIGGER trg_currencies__upd
 BEFORE UPDATE ON currency.currencies
 FOR EACH ROW EXECUTE FUNCTION currency.tg_set_updated_at();
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS currency.exchange_rates (
   CONSTRAINT ck_exchange_rates__not_same CHECK (base_code <> quote_code)
 );
 
+DROP TRIGGER IF EXISTS trg_exchange_rates__upd ON currency.exchange_rates;
 CREATE TRIGGER trg_exchange_rates__upd
 BEFORE UPDATE ON currency.exchange_rates
 FOR EACH ROW EXECUTE FUNCTION currency.tg_set_updated_at();
@@ -59,4 +61,3 @@ ON CONFLICT (code) DO NOTHING;
 INSERT INTO currency.currencies(code, name, symbol, scale)
 VALUES ('JPY', 'Japanese Yen','¥',0)
 ON CONFLICT (code) DO NOTHING;
-

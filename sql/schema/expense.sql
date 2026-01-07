@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS expense.expense_categories (
   CONSTRAINT uq_expense_categories__user_name UNIQUE (user_id, name)
 );
 
+DROP TRIGGER IF EXISTS trg_expense_categories__upd ON expense.expense_categories;
 CREATE TRIGGER trg_expense_categories__upd
 BEFORE UPDATE ON expense.expense_categories
 FOR EACH ROW EXECUTE FUNCTION expense.tg_set_updated_at();
@@ -37,6 +38,7 @@ CREATE TABLE IF NOT EXISTS expense.expenses (
   CONSTRAINT ck_expenses__amount_positive CHECK (amount >= 0)
 );
 
+DROP TRIGGER IF EXISTS trg_expenses__upd ON expense.expenses;
 CREATE TRIGGER trg_expenses__upd
 BEFORE UPDATE ON expense.expenses
 FOR EACH ROW EXECUTE FUNCTION expense.tg_set_updated_at();
@@ -57,4 +59,3 @@ INSERT INTO expense.expenses(user_id, amount, currency, category_id, merchant, o
 SELECT 1, 11.990000, 'USD', c.id, 'YouTube', now(), '会员订阅'
 FROM expense.expense_categories c WHERE c.user_id=1 AND c.name='订阅'
 LIMIT 1;
-
