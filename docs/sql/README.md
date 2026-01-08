@@ -6,7 +6,7 @@
 - 模块与实体
   - currency：currencies、exchange_rates → 多币种统一换算、历史汇率查询
   - "user"：users、user_prefs → 用户上下文、偏好（默认货币、时区）
-  - deposit：institutions、accounts、account_balances → 存款账户与余额时间序列
+  - deposit：institutions、financial_products、product_balances → 用户绑定金融机构及其金融产品与余额时间序列
   - expense：expense_categories、expenses → 消费记录与分类
   - loan：counterparties、loans、loan_schedules、loan_txns → 借贷、还款计划与记录
   - scheduler：jobs、job_runs、reminders、confirmations → 定时任务、提醒、确认回执（自动记账触发）
@@ -57,7 +57,7 @@ END $$;
 
 ## 4) 全局视图与物化视图建议
 - 统一资产视图 report.v_user_net_worth（示例）
-  - 汇总 deposit.account_balances 最新余额（示例）并留待应用层统一换算
+  - 汇总 deposit.product_balances 最新余额（示例）并留待应用层统一换算
 ```sql
 CREATE SCHEMA IF NOT EXISTS report;
 
@@ -67,12 +67,13 @@ SELECT u.id AS user_id,
 FROM "user".users u
 LEFT JOIN LATERAL (
   -- 示例：取每账户最新余额并假设已换算为用户默认货币 amount_base_ccy
-  SELECT a.user_id, ab.amount AS amount_base_ccy
-  FROM deposit.accounts a
-  JOIN deposit.account_balances ab ON ab.account_id = a.id
-  WHERE a.user_id = u.id
-  AND ab.as_of = (
-    SELECT max(as_of) FROM deposit.account_balances ab2 WHERE ab2.account_id = a.id
+  SELECT i.user_id, pb.amount AS amount_base_ccy
+  FROM deposit.financial_products p
+  JOIN deposit.institutions i ON i.id = p.institution_id
+  JOIN deposit.product_balances pb ON pb.product_id = p.id
+  WHERE i.user_id = u.id
+  AND pb.as_of = (
+    SELECT max(as_of) FROM deposit.product_balances pb2 WHERE pb2.product_id = p.id
   )
 ) b ON true
 GROUP BY u.id;
@@ -101,4 +102,3 @@ GROUP BY base_code, quote_code, rate_date;
 - 时区一致：TIMESTAMPTZ，应用层负责入库即 UTC
 - 金额精度：NUMERIC(20,6)/(20,10)；禁止浮点
 - 性能阈值：常用查询 P95 < 200ms（有合适索引与限制的查询范围）
-

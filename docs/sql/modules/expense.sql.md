@@ -1,60 +1,18 @@
-# Expense 模块 SQL 说明书
+# Expense 模块 SQL 说明
+## 1. 模块范围
+- 责任：消费记录与分类管理
+- 依赖：引用 `"user".users`、`currency.currencies`、`deposit.institutions`（可选，作为支付机构外键）
+- 实体：`expense_categories`（分类，支持父子关系）、`expenses`（消费流水）
 
-## 1. 模块范围与实体清单
-- 职责：消费记录与分类管理
-- 依赖：引用 "user".users、currency.currencies、deposit.accounts（可选）
-- 实体
-  - expense_categories：分类（支持父子）
-  - expenses：消费记录（含标签/商户/发生时间）
+## 2. 字段概览
+- `expense.expense_categories`
+  - `id` BIGINT PK，`user_id` BIGINT FK `"user".users(id)`，`name` TEXT，`parent_id` BIGINT 可空 FK `expense_categories(id)`，`created_at/updated_at`
+  - 唯一约束：(`user_id`,`name`)
+- `expense.expenses`
+  - `id` BIGINT PK，`user_id` BIGINT FK `"user".users(id)`，`amount` NUMERIC(20,6) NOT NULL（>=0），`currency` TEXT FK `currency.currencies(code)`，`category_id` BIGINT 可空 FK `expense.expense_categories(id)`，`merchant` TEXT，可选 `tags` TEXT[]，`paid_account_id` BIGINT 可空 FK `deposit.institutions(id)`，`occurred_at` TIMESTAMPTZ，`source_ref` TEXT 可空（部分唯一），`note` TEXT，`created_at/updated_at`
+  - 部分唯一：(`user_id`,`source_ref`) WHERE source_ref IS NOT NULL
 
-## 2. 数据字典
-（字段说明补充）
-
-- expense.expense_categories 字段说明
-  - id：分类ID，自增主键
-  - user_id：所属用户ID（同名在用户维度唯一）
-  - name：分类名称
-  - parent_id：父分类ID（可空）
-  - created_at/updated_at：审计时间（UTC）
-  - 唯一：(user_id, name)：同用户下分类重名校验
-
-- expense.expenses 字段说明
-  - id：消费记录ID，自增主键
-  - user_id：所属用户ID
-  - amount：消费金额（NUMERIC(20,6)）
-  - currency：消费币种（引用 currency.currencies）
-  - category_id：分类ID（可空）
-  - merchant：商户名称
-  - tags：标签数组
-  - paid_account_id：支付账户（存款账户，可空）
-  - occurred_at：发生时间（UTC）
-  - source_ref：外部来源幂等键（可空，部分唯一）
-  - note：备注
-  - created_at/updated_at：审计时间（UTC）
-- expense.expense_categories
-  - id | BIGINT PK
-  - user_id | BIGINT FK "user".users(id)
-  - name | TEXT NOT NULL
-  - parent_id | BIGINT NULL FK expense_categories(id)
-  - created_at/updated_at | TIMESTAMPTZ
-  - 唯一：(user_id, name)
-
-- expense.expenses
-  - id | BIGINT PK
-  - user_id | BIGINT FK "user".users(id)
-  - amount | NUMERIC(20,6) NOT NULL
-  - currency | TEXT NOT NULL FK currency.currencies(code)
-  - category_id | BIGINT NULL FK expense_categories(id)
-  - merchant | TEXT NULL
-  - tags | TEXT[] NULL
-  - paid_account_id | BIGINT NULL FK deposit.accounts(id)
-  - occurred_at | TIMESTAMPTZ NOT NULL
-  - source_ref | TEXT NULL（外部来源幂等键）
-  - note | TEXT NULL
-  - created_at/updated_at | TIMESTAMPTZ
-  - 唯一（可选）：基于 (user_id, source_ref) 的部分唯一
-
-## 3. DDL（可执行）
+## 3. 主要 DDL
 ```sql
 CREATE SCHEMA IF NOT EXISTS expense;
 
@@ -71,7 +29,6 @@ CREATE TABLE IF NOT EXISTS expense.expense_categories (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_expense_categories__user_name UNIQUE (user_id, name)
 );
-
 CREATE TRIGGER trg_expense_categories__upd
 BEFORE UPDATE ON expense.expense_categories
 FOR EACH ROW EXECUTE FUNCTION expense.tg_set_updated_at();
@@ -84,7 +41,7 @@ CREATE TABLE IF NOT EXISTS expense.expenses (
   category_id     BIGINT NULL REFERENCES expense.expense_categories(id) ON DELETE SET NULL,
   merchant        TEXT   NULL,
   tags            TEXT[] NULL,
-  paid_account_id BIGINT NULL REFERENCES deposit.accounts(id) ON DELETE SET NULL,
+  paid_account_id BIGINT NULL REFERENCES deposit.institutions(id) ON DELETE SET NULL,
   occurred_at     TIMESTAMPTZ NOT NULL,
   source_ref      TEXT   NULL,
   note            TEXT   NULL,
@@ -92,12 +49,10 @@ CREATE TABLE IF NOT EXISTS expense.expenses (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT ck_expenses__amount_positive CHECK (amount >= 0)
 );
-
 CREATE TRIGGER trg_expenses__upd
 BEFORE UPDATE ON expense.expenses
 FOR EACH ROW EXECUTE FUNCTION expense.tg_set_updated_at();
 
--- 幂等：当 source_ref 非空时保证 (user_id, source_ref) 唯一
 CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses__user_source_ref
 ON expense.expenses (user_id, source_ref)
 WHERE source_ref IS NOT NULL;
@@ -105,7 +60,7 @@ WHERE source_ref IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_expenses__user_occurred_at_desc
 ON expense.expenses (user_id, occurred_at DESC);
 
--- 种子
+-- 种子数据示例
 INSERT INTO expense.expense_categories(user_id, name) VALUES (1,'订阅')
 ON CONFLICT DO NOTHING;
 
@@ -115,13 +70,14 @@ FROM expense.expense_categories c WHERE c.user_id=1 AND c.name='订阅'
 LIMIT 1;
 ```
 
-## 4. 一致性与幂等
-- 以 (user_id, source_ref) 作为外部导入幂等键（部分唯一索引）
-- 未提供 source_ref 时，业务端需防重（如 task_id+period_key）
+## 4. 幂等与约束
+- `source_ref` 用于外部导入的幂等键（同一用户 + 来源键唯一）；为空时由业务侧自行保证不重复。
+- 金额非负，分类同用户内唯一；删除用户时级联删除其分类和消费。
+- `paid_account_id` 可为空，指向机构，删除机构时置空。
 
-## 5. 典型查询与性能
+## 5. 示例查询
 ```sql
--- 按月统计分类消费（用户默认货币层面可在应用端换算）
+-- 按月汇总分类支出
 SELECT date_trunc('month', occurred_at) AS month,
        category_id,
        sum(amount) AS total_amount
@@ -130,20 +86,3 @@ WHERE user_id = $1
 GROUP BY 1,2
 ORDER BY 1 DESC;
 ```
-- 性能：user_id+occurred_at 索引；必要时分区（大规模日志）
-
-## 6. 权限与安全
-- RLS（可选）：按 user_id 行级策略；最小权限角色
-
-## 7. 历史与时间序列
-- 可对 expenses 按月分区；老分区归档
-
-## 8. 视图与物化视图（可选）
-- 提供商户维度/分类维度聚合视图（如月度 Top N）
-
-## 9. 迁移与回滚
-- V1.1 增加 tags/paid_account_id；V1.2 增加 source_ref
-- 回滚注意部分唯一索引需先删除再回退
-
-## 10. 测试与数据校验
-- 金额非负、外键存在、部分唯一对 NULL 处理正确

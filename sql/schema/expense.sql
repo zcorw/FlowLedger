@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS expense.expenses (
   category_id     BIGINT NULL REFERENCES expense.expense_categories(id) ON DELETE SET NULL,
   merchant        TEXT   NULL,
   tags            TEXT[] NULL,
-  paid_account_id BIGINT NULL REFERENCES deposit.accounts(id) ON DELETE SET NULL,
+  paid_account_id BIGINT NULL REFERENCES deposit.institutions(id) ON DELETE SET NULL,
   occurred_at     TIMESTAMPTZ NOT NULL,
   source_ref      TEXT   NULL,
   note            TEXT   NULL,
