@@ -161,3 +161,78 @@ class Expense(Base):
     note: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class Institution(Base):
+    __tablename__ = "institutions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_institutions__user_name"),
+        {"schema": "deposit"},
+    )
+
+    _id_type = BigInteger().with_variant(Integer, "sqlite")
+
+    id: Mapped[int] = mapped_column(_id_type, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        _id_type, ForeignKey("user.users.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    type: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class FinancialProduct(Base):
+    __tablename__ = "financial_products"
+    __table_args__ = (
+        CheckConstraint(
+            "product_type IN ('deposit','investment','securities','other')",
+            name="ck_fin_products__type",
+        ),
+        CheckConstraint(
+            "status IN ('active','inactive','closed')",
+            name="ck_fin_products__status",
+        ),
+        CheckConstraint(
+            "risk_level IN ('flexible','stable','high_risk')",
+            name="ck_fin_products__risk",
+        ),
+        Index("idx_fin_products__institution_id", "institution_id"),
+        {"schema": "deposit"},
+    )
+
+    _id_type = BigInteger().with_variant(Integer, "sqlite")
+
+    id: Mapped[int] = mapped_column(_id_type, primary_key=True, autoincrement=True)
+    institution_id: Mapped[int] = mapped_column(
+        _id_type, ForeignKey("deposit.institutions.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    product_type: Mapped[str] = mapped_column(String, nullable=False, default="deposit")
+    currency: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="active")
+    risk_level: Mapped[str] = mapped_column(String, nullable=False, default="stable")
+    amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ProductBalance(Base):
+    __tablename__ = "product_balances"
+    __table_args__ = (
+        CheckConstraint("amount >= 0", name="ck_product_balances__amount_nonneg"),
+        UniqueConstraint("product_id", "as_of", name="uq_product_balances__product_asof"),
+        Index("idx_product_balances__product_as_of_desc", "product_id", "as_of"),
+        {"schema": "deposit"},
+    )
+
+    _id_type = BigInteger().with_variant(Integer, "sqlite")
+
+    id: Mapped[int] = mapped_column(_id_type, primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        _id_type, ForeignKey("deposit.financial_products.id", ondelete="CASCADE"), nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

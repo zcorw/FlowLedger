@@ -32,7 +32,7 @@ def client():
         poolclass=StaticPool,
     )
     engine = engine.execution_options(
-        schema_translate_map={"currency": None, "user": None, "expense": None}
+        schema_translate_map={"currency": None, "user": None, "expense": None, "deposit": None}
     )
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
     with engine.begin() as conn:
