@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, validator
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..auth import resolve_user_id
@@ -66,6 +67,7 @@ class InstitutionOut(BaseModel):
     id: int
     name: str
     type: str
+    product_number: int = 0
 
 
 class InstitutionPatch(BaseModel):
@@ -129,7 +131,7 @@ class ProductPatch(BaseModel):
         return v2
 
 
-class ProductOut(BaseModel):
+class ProductBaseOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -140,6 +142,12 @@ class ProductOut(BaseModel):
     status: str
     risk_level: str
     amount: Decimal
+    amount_updated_at: datetime
+
+
+class ProductOut(ProductBaseOut):
+    institution_name: str
+    institution_type: str
 
 
 class ProductsOut(BaseModel):
@@ -148,6 +156,13 @@ class ProductsOut(BaseModel):
     page_size: int
     has_next: bool
     data: List[ProductOut]
+
+
+def _product_response(prod: FinancialProduct, inst: Institution) -> dict:
+    prod_data = ProductBaseOut.model_validate(prod, from_attributes=True).model_dump()
+    prod_data["institution_name"] = inst.name
+    prod_data["institution_type"] = inst.type
+    return prod_data
 
 
 class BalanceIn(BaseModel):
@@ -210,6 +225,7 @@ def create_institution(
     db.commit()
     db.refresh(inst)
     resp = InstitutionOut.model_validate(inst, from_attributes=True).model_dump()
+    resp["product_number"] = 0
     if cache_key:
         _idem_cache[cache_key] = resp
     return resp
@@ -220,20 +236,41 @@ def list_institutions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     type: Optional[str] = Query(None, pattern=r"^(bank|broker|other)$"),
+    name: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(Institution).filter(Institution.user_id == current_user.id)
+    base_query = db.query(Institution).filter(Institution.user_id == current_user.id)
+    if type:
+        base_query = base_query.filter(Institution.type == type)
+    if name:
+        name_filter = f"%{name.strip()}%"
+        base_query = base_query.filter(Institution.name.ilike(name_filter))
+
+    total = base_query.count()
+
+    query = (
+        db.query(Institution, func.count(FinancialProduct.id).label("product_number"))
+        .outerjoin(FinancialProduct, FinancialProduct.institution_id == Institution.id)
+        .filter(Institution.user_id == current_user.id)
+    )
     if type:
         query = query.filter(Institution.type == type)
-    total = query.count()
+    if name:
+        name_filter = f"%{name.strip()}%"
+        query = query.filter(Institution.name.ilike(name_filter))
+    query = query.group_by(Institution.id)
     rows = (
         query.order_by(Institution.id.asc())
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
     )
-    data = [InstitutionOut.model_validate(row, from_attributes=True).model_dump() for row in rows]
+    data = []
+    for inst, product_number in rows:
+        inst_data = InstitutionOut.model_validate(inst, from_attributes=True).model_dump()
+        inst_data["product_number"] = product_number
+        data.append(inst_data)
     return {
         "total": total,
         "page": page,
@@ -307,13 +344,14 @@ def create_product(
         status=payload.status,
         risk_level=payload.risk_level,
         amount=payload.amount or Decimal("0"),
+        amount_updated_at=now,
         created_at=now,
         updated_at=now,
     )
     db.add(prod)
     db.commit()
     db.refresh(prod)
-    resp = ProductOut.model_validate(prod, from_attributes=True).model_dump()
+    resp = _product_response(prod, inst)
     if cache_key:
         _idem_cache[cache_key] = resp
     return resp
@@ -331,7 +369,7 @@ def list_products(
     current_user: User = Depends(get_current_user),
 ):
     query = (
-        db.query(FinancialProduct)
+        db.query(FinancialProduct, Institution)
         .join(Institution, FinancialProduct.institution_id == Institution.id)
         .filter(Institution.user_id == current_user.id)
     )
@@ -351,7 +389,7 @@ def list_products(
         .limit(page_size)
         .all()
     )
-    data = [ProductOut.model_validate(row, from_attributes=True).model_dump() for row in rows]
+    data = [_product_response(prod, inst) for prod, inst in rows]
     return {
         "total": total,
         "page": page,
@@ -368,14 +406,15 @@ def patch_product(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    prod = (
-        db.query(FinancialProduct)
+    row = (
+        db.query(FinancialProduct, Institution)
         .join(Institution, FinancialProduct.institution_id == Institution.id)
         .filter(FinancialProduct.id == product_id, Institution.user_id == current_user.id)
         .first()
     )
-    if not prod:
+    if not row:
         raise HTTPException(status_code=404, detail="product_not_found")
+    prod, inst = row
 
     if payload.name is not None:
         prod.name = payload.name
@@ -388,7 +427,7 @@ def patch_product(
     prod.updated_at = _now()
     db.commit()
     db.refresh(prod)
-    return ProductOut.model_validate(prod, from_attributes=True).model_dump()
+    return _product_response(prod, inst)
 
 
 @router.get("/products/{product_id}/balances", response_model=BalancesOut)

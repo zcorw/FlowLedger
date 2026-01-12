@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS "user".users (
   last_login_at    TIMESTAMPTZ NULL,
   telegram_user_id BIGINT NULL UNIQUE,
   is_bot_enabled   BOOLEAN NOT NULL DEFAULT true,
+  email_verification_token TEXT NULL,
+  email_verification_expires_at TIMESTAMPTZ NULL,
+  email_verified_at TIMESTAMPTZ NULL;
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );

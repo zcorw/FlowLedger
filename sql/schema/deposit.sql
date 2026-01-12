@@ -18,7 +18,7 @@ BEGIN
 
   IF latest_ts IS NOT NULL AND NEW.as_of = latest_ts THEN
     UPDATE deposit.financial_products
-    SET amount = NEW.amount, updated_at = now()
+    SET amount = NEW.amount, amount_updated_at = NEW.as_of, updated_at = now()
     WHERE id = NEW.product_id;
   END IF;
   RETURN NEW;
@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS deposit.financial_products (
   status         TEXT NOT NULL DEFAULT 'active',
   risk_level     TEXT NOT NULL DEFAULT 'stable',
   amount         NUMERIC(20,6) NOT NULL DEFAULT 0,
+  amount_updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT ck_fin_products__type CHECK (product_type IN ('deposit','investment','securities','other')),
@@ -94,20 +95,42 @@ CREATE TRIGGER trg_product_balances__sync_amount
 AFTER INSERT OR UPDATE ON deposit.product_balances
 FOR EACH ROW EXECUTE FUNCTION deposit.tg_sync_product_amount();
 
--- Seeds
-INSERT INTO deposit.institutions(user_id, name, type)
-VALUES (1, 'Example Bank', 'bank')
-ON CONFLICT (user_id, name) DO NOTHING;
-
-INSERT INTO deposit.financial_products(institution_id, name, product_type, currency)
-SELECT i.id, 'Example Savings', 'deposit', 'USD'
-FROM deposit.institutions i
-WHERE i.user_id = 1 AND i.name = 'Example Bank'
-ON CONFLICT DO NOTHING;
-
+-- Seeds (tie to first available user if any)
+WITH u AS (
+  SELECT id FROM "user".users ORDER BY id LIMIT 1
+),
+inst AS (
+  INSERT INTO deposit.institutions(user_id, name, type)
+  SELECT u.id, 'Example Bank', 'bank' FROM u
+  ON CONFLICT (user_id, name) DO NOTHING
+  RETURNING id, user_id, name
+),
+inst_selected AS (
+  SELECT id, user_id, name FROM inst
+  UNION ALL
+  SELECT i.id, i.user_id, i.name
+  FROM deposit.institutions i
+  JOIN u ON i.user_id = u.id
+  WHERE i.name = 'Example Bank'
+  LIMIT 1
+),
+prod AS (
+  INSERT INTO deposit.financial_products(institution_id, name, product_type, currency)
+  SELECT i.id, 'Example Savings', 'deposit', 'USD'
+  FROM inst_selected i
+  ON CONFLICT DO NOTHING
+  RETURNING id, institution_id
+),
+prod_selected AS (
+  SELECT id, institution_id FROM prod
+  UNION ALL
+  SELECT p.id, p.institution_id
+  FROM deposit.financial_products p
+  JOIN inst_selected i ON p.institution_id = i.id
+  WHERE p.name = 'Example Savings'
+  LIMIT 1
+)
 INSERT INTO deposit.product_balances(product_id, amount, as_of)
 SELECT p.id, 1000.00, now()
-FROM deposit.financial_products p
-JOIN deposit.institutions i ON i.id = p.institution_id
-WHERE i.user_id = 1 AND i.name = 'Example Bank'
+FROM prod_selected p
 LIMIT 1;

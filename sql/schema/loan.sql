@@ -94,15 +94,34 @@ CREATE TRIGGER trg_loan_txns__upd
 BEFORE UPDATE ON loan.loan_txns
 FOR EACH ROW EXECUTE FUNCTION loan.tg_set_updated_at();
 
--- Seeds
-INSERT INTO loan.counterparties(name, type) VALUES ('Example Lender','institution')
-ON CONFLICT DO NOTHING;
-
-INSERT INTO loan.loans(user_id, counterparty_id, principal, currency, rate_type, rate_value, term_months, start_date)
-SELECT 1, c.id, 10000.00, 'USD', 'fixed', 0.0500000000, 12, now()
-FROM loan.counterparties c WHERE c.name='Example Lender'
-ON CONFLICT DO NOTHING;
-
+-- Seeds (tie to first available user if any)
+WITH u AS (
+  SELECT id FROM "user".users ORDER BY id LIMIT 1
+),
+cp AS (
+  INSERT INTO loan.counterparties(name, type)
+  VALUES ('Example Lender','institution')
+  ON CONFLICT DO NOTHING
+  RETURNING id
+),
+cp_selected AS (
+  SELECT id FROM cp
+  UNION ALL
+  SELECT id FROM loan.counterparties WHERE name='Example Lender' LIMIT 1
+),
+loan_ins AS (
+  INSERT INTO loan.loans(user_id, counterparty_id, principal, currency, rate_type, rate_value, term_months, start_date)
+  SELECT u.id, c.id, 10000.00, 'USD', 'fixed', 0.0500000000, 12, now()
+  FROM u CROSS JOIN cp_selected c
+  ON CONFLICT DO NOTHING
+  RETURNING id
+),
+loan_selected AS (
+  SELECT id FROM loan_ins
+  UNION ALL
+  SELECT id FROM loan.loans ORDER BY id LIMIT 1
+)
 INSERT INTO loan.loan_schedules(loan_id, period_no, due_date, principal_due, interest_due)
 SELECT l.id, 1, now() + interval '30 days', 800.00, 50.00
-FROM loan.loans l LIMIT 1;
+FROM loan_selected l
+LIMIT 1;

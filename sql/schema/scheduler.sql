@@ -89,16 +89,32 @@ CREATE TRIGGER trg_confirmations__upd
 BEFORE UPDATE ON scheduler.confirmations
 FOR EACH ROW EXECUTE FUNCTION scheduler.tg_set_updated_at();
 
--- Seeds
-INSERT INTO scheduler.jobs(user_id, name, rule, first_run_at)
-VALUES (1, 'YouTube 订阅', 'cron: 0 10 1 * *', now())
-ON CONFLICT DO NOTHING;
-
-INSERT INTO scheduler.job_runs(job_id, period_key, scheduled_at)
-SELECT j.id, to_char(now(), 'YYYY-MM'), date_trunc('month', now())
-FROM scheduler.jobs j
-LIMIT 1;
-
+-- Seeds (tie to first available user if any)
+WITH u AS (
+  SELECT id FROM "user".users ORDER BY id LIMIT 1
+),
+job_ins AS (
+  INSERT INTO scheduler.jobs(user_id, name, rule, first_run_at)
+  SELECT u.id, 'YouTube ???', 'cron: 0 10 1 * *', now() FROM u
+  ON CONFLICT DO NOTHING
+  RETURNING id
+),
+job_selected AS (
+  SELECT id FROM job_ins
+  UNION ALL
+  SELECT id FROM scheduler.jobs ORDER BY id LIMIT 1
+),
+run_ins AS (
+  INSERT INTO scheduler.job_runs(job_id, period_key, scheduled_at)
+  SELECT j.id, to_char(now(), 'YYYY-MM'), date_trunc('month', now()) FROM job_selected j
+  ON CONFLICT DO NOTHING
+  RETURNING id
+),
+run_selected AS (
+  SELECT id FROM run_ins
+  UNION ALL
+  SELECT id FROM scheduler.job_runs ORDER BY id LIMIT 1
+)
 INSERT INTO scheduler.reminders(job_run_id, sent_at)
-SELECT r.id, now() FROM scheduler.job_runs r
+SELECT r.id, now() FROM run_selected r
 LIMIT 1;

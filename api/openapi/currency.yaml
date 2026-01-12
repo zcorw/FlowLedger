@@ -2,8 +2,7 @@ openapi: 3.1.0
 info:
   title: Flow-Ledger Currency API
   version: 1.0.0
-  description: >
-    货币与历史汇率、批量换算接口。来源：Flow-Ledger 需求。
+  description: Currency and FX endpoints for Flow-Ledger.
 servers:
   - url: https://api.example.com/v1
 security:
@@ -17,26 +16,26 @@ components:
           authorizationUrl: https://auth.example.com/oauth/authorize
           tokenUrl: https://auth.example.com/oauth/token
           scopes:
-            read:currency: 读取货币与汇率
+            read:currency: Read currency and FX data
         clientCredentials:
           tokenUrl: https://auth.example.com/oauth/token
           scopes:
-            read:currency: 读取货币与汇率
+            read:currency: Read currency and FX data
   headers:
     XRequestId:
-      description: 请求ID
+      description: Request ID
       schema: { type: string }
     XRateLimitLimit:
-      description: 限流总额
+      description: Rate limit total
       schema: { type: integer }
     XRateLimitRemaining:
-      description: 剩余额度
+      description: Remaining quota
       schema: { type: integer }
     XRateLimitReset:
-      description: 重置时间戳（秒）
+      description: Reset time (seconds)
       schema: { type: integer }
     IdempotencyKey:
-      description: 幂等键回显
+      description: Idempotency key
       schema: { type: string }
   parameters:
     Page:
@@ -47,52 +46,102 @@ components:
       in: query
       name: page_size
       schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
-    From:
+    Code:
       in: query
-      name: from
-      description: 起始时间（UTC）
-      schema: { type: string, format: date-time }
-    To:
-      in: query
-      name: to
-      description: 截止时间（UTC）
-      schema: { type: string, format: date-time }
-    FilterCode:
-      in: query
-      name: filter[code]
+      name: code
       schema: { type: string, pattern: '^[A-Z]{3}$' }
+    Query:
+      in: query
+      name: q
+      description: Search by currency name or symbol
+      schema: { type: string }
+    Sort:
+      in: query
+      name: sort
+      description: Comma separated fields, prefix with "-" for descending
+      schema: { type: string, default: code }
   schemas:
-    Money:
-      type: object
-      properties:
-        amount: { type: string, pattern: '^-?\d+(\.\d{1,6})?$' }
-        currency: { type: string, pattern: '^[A-Z]{3}$' }
-      required: [amount, currency]
     Currency:
       type: object
       properties:
         code: { type: string, pattern: '^[A-Z]{3}$' }
         name: { type: string }
-        symbol: { type: string }
+        symbol: { type: string, nullable: true }
         scale: { type: integer, minimum: 0, maximum: 6 }
       required: [code, name, scale]
-    ExchangeRate:
+    CurrencyPage:
+      type: object
+      properties:
+        total: { type: integer }
+        page: { type: integer }
+        page_size: { type: integer }
+        has_next: { type: boolean }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Currency' }
+      required: [total, page, page_size, has_next, items]
+    CurrencyUpsert:
+      type: object
+      properties:
+        code: { type: string, pattern: '^[A-Z]{3}$' }
+        name: { type: string }
+        symbol: { type: string, nullable: true }
+        scale: { type: integer, minimum: 0, maximum: 6 }
+      required: [code, name, scale]
+    CurrencyPatch:
+      type: object
+      properties:
+        name: { type: string, nullable: true }
+        symbol: { type: string, nullable: true }
+        scale: { type: integer, minimum: 0, maximum: 6, nullable: true }
+    ExchangeRateSingle:
       type: object
       properties:
         base: { type: string, pattern: '^[A-Z]{3}$' }
         quote: { type: string, pattern: '^[A-Z]{3}$' }
         date: { type: string, format: date }
-        rate: { type: string, pattern: '^\d+(\.\d{1,10})?$' }
-      required: [base, quote, date, rate]
+        rate: { type: string }
+        effective_date: { type: string, format: date }
+      required: [base, quote, date, rate, effective_date]
+    ExchangeRateMap:
+      type: object
+      additionalProperties:
+        type: object
+        properties:
+          rate: { type: string }
+          effective_date: { type: string, format: date }
+        required: [rate, effective_date]
+    ConvertRequest:
+      type: object
+      properties:
+        amount: { type: string, pattern: '^-?\\d+(\\.\\d{1,6})?$' }
+        from: { type: string, pattern: '^[A-Z]{3}$' }
+        to: { type: string, pattern: '^[A-Z]{3}$' }
+        date: { type: string, format: date }
+      required: [amount, from, to]
+    ConvertResponse:
+      type: object
+      properties:
+        amount: { type: string }
+        from_currency: { type: string, pattern: '^[A-Z]{3}$' }
+        to_currency: { type: string, pattern: '^[A-Z]{3}$' }
+        rate: { type: string }
+        converted: { type: string }
+        effective_date: { type: string, format: date }
+      required: [amount, from_currency, to_currency, rate, converted, effective_date]
+    BulkUpsertResult:
+      type: object
+      properties:
+        code: { type: string, pattern: '^[A-Z]{3}$' }
+        status: { type: string, enum: [created, updated] }
+      required: [code, status]
     Error:
       type: object
       properties:
-        code: { type: string }
-        message: { type: string }
-        details: {}
+        detail: { type: string }
   responses:
     Unauthorized:
-      description: 未授权
+      description: Unauthorized
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
@@ -100,15 +149,17 @@ paths:
   /currencies:
     get:
       tags: [currency]
-      summary: 货币列表
+      summary: List currencies
       security: [{ OAuth2: [read:currency] }]
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
-        - $ref: '#/components/parameters/FilterCode'
+        - $ref: '#/components/parameters/Code'
+        - $ref: '#/components/parameters/Query'
+        - $ref: '#/components/parameters/Sort'
       responses:
         '200':
-          description: 成功
+          description: Success
           headers:
             X-Request-Id: { $ref: '#/components/headers/XRequestId' }
             X-RateLimit-Limit: { $ref: '#/components/headers/XRateLimitLimit' }
@@ -116,21 +167,26 @@ paths:
             X-RateLimit-Reset: { $ref: '#/components/headers/XRateLimitReset' }
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  total: { type: integer }
-                  page: { type: integer }
-                  page_size: { type: integer }
-                  has_next: { type: boolean }
-                  data:
-                    type: array
-                    items: { $ref: '#/components/schemas/Currency' }
+              schema: { $ref: '#/components/schemas/CurrencyPage' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [currency]
+      summary: Create or replace a currency
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CurrencyUpsert' }
+      responses:
+        '200':
+          description: Upserted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Currency' }
   /currencies/{code}:
     get:
       tags: [currency]
-      summary: 货币详情
+      summary: Get currency by code
       parameters:
         - in: path
           name: code
@@ -138,19 +194,72 @@ paths:
           schema: { type: string, pattern: '^[A-Z]{3}$' }
       responses:
         '200':
-          description: 成功
+          description: Success
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Currency' }
         '404':
-          description: 未找到
+          description: Not found
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+    patch:
+      tags: [currency]
+      summary: Patch currency fields
+      parameters:
+        - in: path
+          name: code
+          required: true
+          schema: { type: string, pattern: '^[A-Z]{3}$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CurrencyPatch' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Currency' }
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: Invalid scale
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /currencies/bulk:
+    put:
+      tags: [currency]
+      summary: Bulk upsert currencies
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              minItems: 1
+              items: { $ref: '#/components/schemas/CurrencyUpsert' }
+      responses:
+        '200':
+          description: Result per item
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: '#/components/schemas/BulkUpsertResult' }
+                required: [results]
   /exchange-rates:
     get:
       tags: [exchange-rate]
-      summary: 历史汇率查询
+      summary: Get exchange rates
       parameters:
         - in: query
           name: base
@@ -158,7 +267,7 @@ paths:
           schema: { type: string, pattern: '^[A-Z]{3}$' }
         - in: query
           name: quote
-          required: true
+          required: false
           schema: { type: string, pattern: '^[A-Z]{3}$' }
         - in: query
           name: date
@@ -166,19 +275,43 @@ paths:
           schema: { type: string, format: date }
       responses:
         '200':
-          description: 成功
+          description: Success
+          content:
+            application/json:
+              oneOf:
+                - $ref: '#/components/schemas/ExchangeRateSingle'
+                - type: object
+                  properties:
+                    base: { type: string, pattern: '^[A-Z]{3}$' }
+                    date: { type: string, format: date }
+                    rates: { $ref: '#/components/schemas/ExchangeRateMap' }
+                  required: [base, date, rates]
+        '404':
+          description: Rate not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /exchange-rates/sync:
+    post:
+      tags: [exchange-rate]
+      summary: Trigger FX sync now
+      responses:
+        '200':
+          description: Sync triggered
           content:
             application/json:
               schema:
                 type: object
-                properties:
-                  data:
-                    type: array
-                    items: { $ref: '#/components/schemas/ExchangeRate' }
+                additionalProperties: true
+        '500':
+          description: Sync error
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
   /convert:
     post:
       tags: [convert]
-      summary: 批量金额换算
+      summary: Convert amount between currencies
       parameters:
         - in: header
           name: Idempotency-Key
@@ -188,45 +321,23 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              properties:
-                at:
-                  type: string
-                  format: date-time
-                  description: 换算时间（UTC）
-                items:
-                  type: array
-                  minItems: 1
-                  items:
-                    type: object
-                    properties:
-                      amount: { type: string, pattern: '^-?\d+(\.\d{1,6})?$' }
-                      from: { type: string, pattern: '^[A-Z]{3}$' }
-                      to: { type: string, pattern: '^[A-Z]{3}$' }
-                    required: [amount, from, to]
-              required: [items]
+            schema: { $ref: '#/components/schemas/ConvertRequest' }
       responses:
         '200':
-          description: 成功
+          description: Success
           headers:
             X-Request-Id: { $ref: '#/components/headers/XRequestId' }
             Idempotency-Key: { $ref: '#/components/headers/IdempotencyKey' }
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  at: { type: string, format: date-time }
-                  results:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        from: { $ref: '#/components/schemas/Money' }
-                        to: { $ref: '#/components/schemas/Money' }
+              schema: { $ref: '#/components/schemas/ConvertResponse' }
+        '404':
+          description: Rate not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '422':
-          description: 校验失败
+          description: Validation failed
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }

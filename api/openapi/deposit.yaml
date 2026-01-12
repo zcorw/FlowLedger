@@ -30,7 +30,8 @@ components:
         id: { type: integer, format: int64 }
         name: { type: string }
         type: { type: string, enum: [bank, broker, other] }
-      required: [id, name, type]
+        product_number: { type: integer }
+      required: [id, name, type, product_number]
     InstitutionList:
       type: object
       properties:
@@ -63,7 +64,12 @@ components:
         status: { type: string, enum: [active, inactive, closed] }
         risk_level: { type: string, enum: [flexible, stable, high_risk] }
         amount: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
-      required: [id, institution_id, name, product_type, currency, status, risk_level, amount]
+        amount_updated_at: { type: string, format: date-time }
+        institution_name: { type: string }
+        institution_type: { type: string, enum: [bank, broker, other] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, institution_id, name, product_type, currency, status, risk_level, amount, amount_updated_at, institution_name, institution_type]
     ProductList:
       type: object
       properties:

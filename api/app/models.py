@@ -213,6 +213,7 @@ class FinancialProduct(Base):
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")
     risk_level: Mapped[str] = mapped_column(String, nullable=False, default="stable")
     amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False, default=0)
+    amount_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
