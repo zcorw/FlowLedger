@@ -58,6 +58,16 @@ def _ensure_currency(code: str, db: Session) -> str:
     return code
 
 
+def _require_delete_confirm(req: Request, hard: bool) -> None:
+    key = req.headers.get("X-Confirm-Delete")
+    if hard:
+        if key != "HARD-YES":
+            raise HTTPException(status_code=412, detail="confirm_delete_required")
+    else:
+        if key != "YES":
+            raise HTTPException(status_code=412, detail="confirm_delete_required")
+
+
 class InstitutionIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     type: str = Field(..., pattern=r"^(bank|broker|other)$")
@@ -253,15 +263,6 @@ def list_institutions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    base_query = db.query(Institution).filter(Institution.user_id == current_user.id)
-    if type:
-        base_query = base_query.filter(Institution.type == type)
-    if name:
-        name_filter = f"%{name.strip()}%"
-        base_query = base_query.filter(Institution.name.ilike(name_filter))
-
-    total = base_query.count()
-
     query = (
         db.query(Institution, func.count(FinancialProduct.id).label("product_number"))
         .outerjoin(FinancialProduct, FinancialProduct.institution_id == Institution.id)
@@ -274,6 +275,7 @@ def list_institutions(
         name_filter = f"%{name.strip()}%"
         query = query.filter(Institution.name.ilike(name_filter))
     query = query.group_by(Institution.id)
+    total = query.with_entities(Institution.id).distinct().count()
     rows = (
         query.order_by(Institution.id.asc())
         .offset((page - 1) * page_size)
@@ -321,6 +323,42 @@ def patch_institution(
     if payload.type is not None:
         inst.type = payload.type
     inst.updated_at = _now()
+    db.commit()
+    db.refresh(inst)
+    return InstitutionOut.model_validate(inst, from_attributes=True).model_dump()
+
+
+@router.delete("/institutions/{institution_id}", response_model=InstitutionOut)
+def delete_institution(
+    institution_id: int,
+    req: Request,
+    hard: bool = Query(False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_delete_confirm(req, hard)
+    inst = (
+        db.query(Institution)
+        .filter(Institution.id == institution_id, Institution.user_id == current_user.id)
+        .first()
+    )
+    if not inst:
+        raise HTTPException(status_code=404, detail="institution_not_found")
+
+    if hard:
+        db.delete(inst)
+        db.commit()
+        return InstitutionOut.model_validate(inst, from_attributes=True).model_dump()
+
+    if inst.status == "closed":
+        raise HTTPException(status_code=409, detail="institution_already_closed")
+
+    now = _now()
+    inst.status = "closed"
+    inst.updated_at = now
+    db.query(FinancialProduct).filter(FinancialProduct.institution_id == inst.id).update(
+        {"status": "closed", "updated_at": now}
+    )
     db.commit()
     db.refresh(inst)
     return InstitutionOut.model_validate(inst, from_attributes=True).model_dump()
@@ -443,6 +481,40 @@ def patch_product(
         prod.status = payload.status
     if payload.risk_level is not None:
         prod.risk_level = payload.risk_level
+    prod.updated_at = _now()
+    db.commit()
+    db.refresh(prod)
+    return _product_response(prod, inst)
+
+
+@router.delete("/products/{product_id}", response_model=ProductOut)
+def delete_product(
+    product_id: int,
+    req: Request,
+    hard: bool = Query(False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_delete_confirm(req, hard)
+    row = (
+        db.query(FinancialProduct, Institution)
+        .join(Institution, FinancialProduct.institution_id == Institution.id)
+        .filter(FinancialProduct.id == product_id, Institution.user_id == current_user.id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="product_not_found")
+    prod, inst = row
+
+    if hard:
+        db.delete(prod)
+        db.commit()
+        return _product_response(prod, inst)
+
+    if prod.status == "closed":
+        raise HTTPException(status_code=409, detail="product_already_closed")
+
+    prod.status = "closed"
     prod.updated_at = _now()
     db.commit()
     db.refresh(prod)

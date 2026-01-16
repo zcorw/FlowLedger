@@ -271,6 +271,28 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Institution' }
+    delete:
+      tags: [deposit]
+      summary: 删除机构（默认软删除）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer, format: int64 }
+        - in: query
+          name: hard
+          schema: { type: boolean, default: false }
+        - in: header
+          name: X-Confirm-Delete
+          required: true
+          schema: { type: string }
+          description: 软删除传 YES，硬删除传 HARD-YES
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Institution' }
   /products:
     get:
       tags: [deposit]
@@ -331,6 +353,28 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/ProductPatch' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Product' }
+    delete:
+      tags: [deposit]
+      summary: 删除金融产品（默认软删除）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer, format: int64 }
+        - in: query
+          name: hard
+          schema: { type: boolean, default: false }
+        - in: header
+          name: X-Confirm-Delete
+          required: true
+          schema: { type: string }
+          description: 软删除传 YES，硬删除传 HARD-YES
       responses:
         '200':
           description: OK
