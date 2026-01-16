@@ -1,4 +1,4 @@
-openapi: 3.1.0
+﻿openapi: 3.1.0
 info:
   title: Flow-Ledger Deposit API
   version: 1.1.0
@@ -30,6 +30,7 @@ components:
         id: { type: integer, format: int64 }
         name: { type: string }
         type: { type: string, enum: [bank, broker, other] }
+        status: { type: string, enum: [active, inactive, closed] }
         product_number: { type: integer }
       required: [id, name, type, product_number]
     InstitutionList:
@@ -122,6 +123,99 @@ components:
         data:
           type: array
           items: { $ref: '#/components/schemas/Balance' }
+    ImportInstitutionItem:
+      type: object
+      properties:
+        institution_key: { type: string, minLength: 1, maxLength: 64 }
+        name: { type: string, minLength: 1, maxLength: 128 }
+        type: { type: string, enum: [bank, broker, other] }
+        status: { type: string, enum: [active, inactive, closed], nullable: true }
+      required: [institution_key, name, type]
+    ImportProductItem:
+      type: object
+      properties:
+        product_key: { type: string, minLength: 1, maxLength: 64 }
+        institution_key: { type: string, minLength: 1, maxLength: 64 }
+        name: { type: string, minLength: 1, maxLength: 128 }
+        product_type: { type: string, enum: [deposit, investment, securities, other], default: deposit }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        status: { type: string, enum: [active, inactive, closed], default: active }
+        risk_level: { type: string, enum: [flexible, stable, high_risk], default: stable }
+        amount: { type: string, pattern: '^\d+(\.\d{1,6})?$', nullable: true }
+      required: [product_key, institution_key, name, currency]
+    ImportBalanceItem:
+      type: object
+      properties:
+        product_key: { type: string, minLength: 1, maxLength: 64 }
+        as_of: { type: string, format: date-time }
+        amount: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
+      required: [product_key, as_of, amount]
+    ImportDepositRequest:
+      type: object
+      properties:
+        institutions:
+          type: array
+          items: { $ref: '#/components/schemas/ImportInstitutionItem' }
+        products:
+          type: array
+          items: { $ref: '#/components/schemas/ImportProductItem' }
+        product_balances:
+          type: array
+          items: { $ref: '#/components/schemas/ImportBalanceItem' }
+    ImportDepositUpload:
+      type: object
+      properties:
+        file: { type: string, format: binary }
+      required: [file]
+    ImportInstitutionResult:
+      type: object
+      properties:
+        institution_key: { type: string }
+        institution_id: { type: integer, format: int64, nullable: true }
+        status: { type: string, enum: [created, exists, failed] }
+        error: { type: string, nullable: true }
+      required: [institution_key, status]
+    ImportProductResult:
+      type: object
+      properties:
+        product_key: { type: string }
+        institution_key: { type: string }
+        product_id: { type: integer, format: int64, nullable: true }
+        status: { type: string, enum: [created, exists, failed] }
+        error: { type: string, nullable: true }
+      required: [product_key, institution_key, status]
+    ImportBalanceResult:
+      type: object
+      properties:
+        product_key: { type: string }
+        as_of: { type: string, format: date-time }
+        status: { type: string, enum: [created, exists, failed] }
+        error: { type: string, nullable: true }
+      required: [product_key, as_of, status]
+    ImportSectionResult:
+      type: object
+      properties:
+        total: { type: integer }
+        created: { type: integer }
+        exists: { type: integer }
+        failed: { type: integer }
+      required: [total, created, exists, failed]
+    ImportDepositResponse:
+      type: object
+      properties:
+        institutions: { $ref: '#/components/schemas/ImportSectionResult' }
+        products: { $ref: '#/components/schemas/ImportSectionResult' }
+        product_balances: { $ref: '#/components/schemas/ImportSectionResult' }
+        institution_items:
+          type: array
+          items: { $ref: '#/components/schemas/ImportInstitutionResult' }
+        product_items:
+          type: array
+          items: { $ref: '#/components/schemas/ImportProductResult' }
+        balance_items:
+          type: array
+          items: { $ref: '#/components/schemas/ImportBalanceResult' }
+      required: [institutions, products, product_balances, institution_items, product_items, balance_items]
 paths:
   /institutions:
     get:
@@ -196,6 +290,9 @@ paths:
         - in: query
           name: risk_level
           schema: { type: string, enum: [flexible, stable, high_risk] }
+        - in: query
+          name: currency
+          schema: { type: string, pattern: '^[A-Z]{3}$' }
       responses:
         '200':
           description: OK
@@ -277,3 +374,18 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Balance' }
+  /import/deposit:
+    post:
+      tags: [deposit]
+      summary: 批量导入机构/产品/余额
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: '#/components/schemas/ImportDepositUpload' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportDepositResponse' }

@@ -47,17 +47,17 @@ ON currency.exchange_rates (base_code, quote_code, rate_date DESC);
 
 -- Seeds
 INSERT INTO currency.currencies(code, name, symbol, scale)
-VALUES ('USD','US Dollar','$',2)
+VALUES ('USD','美元','$',2)
 ON CONFLICT (code) DO NOTHING;
 
 INSERT INTO currency.currencies(code, name, symbol, scale)
-VALUES ('CNY','Chinese Yuan','¥',2)
+VALUES ('CNY','人民币','¥',2)
 ON CONFLICT (code) DO NOTHING;
 
 INSERT INTO currency.currencies(code, name, symbol, scale)
-VALUES ('HKD','Hong Kong Dollar','HK$',2)
+VALUES ('HKD','港币','HK$',2)
 ON CONFLICT (code) DO NOTHING;
 
 INSERT INTO currency.currencies(code, name, symbol, scale)
-VALUES ('JPY', 'Japanese Yen','¥',0)
+VALUES ('JPY', '日元','¥',0)
 ON CONFLICT (code) DO NOTHING;

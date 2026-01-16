@@ -29,9 +29,11 @@ CREATE TABLE IF NOT EXISTS deposit.institutions (
   user_id    BIGINT NOT NULL REFERENCES "user".users(id) ON DELETE CASCADE,
   name       TEXT NOT NULL,
   type       TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'active',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT ck_institutions__type CHECK (type IN ('bank','broker','other')),
+  CONSTRAINT ck_institutions__status CHECK (status IN ('active','inactive','closed')),
   CONSTRAINT uq_institutions__user_name UNIQUE (user_id, name)
 );
 
