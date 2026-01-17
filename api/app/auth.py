@@ -12,7 +12,10 @@ from fastapi import Header, HTTPException
 
 
 # Authentication / password hashing defaults. All values can be overridden by env.
+AUTH_ROTATE_ON_STARTUP = os.getenv("AUTH_ROTATE_ON_STARTUP", "false").lower() == "true"
 AUTH_SECRET = os.getenv("AUTH_SECRET", "DEV_ONLY_SECRET")
+if AUTH_ROTATE_ON_STARTUP:
+    AUTH_SECRET = secrets.token_hex(32)
 AUTH_TOKEN_TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", "604800"))  # 7 days
 PASSWORD_HASH_ITERATIONS = int(os.getenv("PASSWORD_HASH_ITERATIONS", "200_000"))
 PASSWORD_MIN_LENGTH = 8
@@ -99,4 +102,3 @@ def resolve_user_id(
     if x_user_id is not None:
         return x_user_id
     raise HTTPException(status_code=401, detail="unauthorized")
-

@@ -32,7 +32,7 @@ components:
         type: { type: string, enum: [bank, broker, other] }
         status: { type: string, enum: [active, inactive, closed] }
         product_number: { type: integer }
-      required: [id, name, type, product_number]
+      required: [id, name, type, status, product_number]
     InstitutionList:
       type: object
       properties:
@@ -68,8 +68,6 @@ components:
         amount_updated_at: { type: string, format: date-time }
         institution_name: { type: string }
         institution_type: { type: string, enum: [bank, broker, other] }
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
       required: [id, institution_id, name, product_type, currency, status, risk_level, amount, amount_updated_at, institution_name, institution_type]
     ProductList:
       type: object
@@ -99,6 +97,11 @@ components:
         product_type: { type: string, enum: [deposit, investment, securities, other] }
         status: { type: string, enum: [active, inactive, closed] }
         risk_level: { type: string, enum: [flexible, stable, high_risk] }
+    ProductStatusPatch:
+      type: object
+      properties:
+        status: { type: string, enum: [active, inactive, closed] }
+      required: [status]
     Balance:
       type: object
       properties:
@@ -216,6 +219,39 @@ components:
           type: array
           items: { $ref: '#/components/schemas/ImportBalanceResult' }
       required: [institutions, products, product_balances, institution_items, product_items, balance_items]
+    LatestBalanceItem:
+      type: object
+      properties:
+        product_id: { type: integer, format: int64 }
+        amount: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
+        as_of: { type: string, format: date-time, nullable: true }
+      required: [product_id, amount]
+    LatestBalanceBatchRequest:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/LatestBalanceItem' }
+      required: [items]
+    LatestBalanceResult:
+      type: object
+      properties:
+        product_id: { type: integer, format: int64 }
+        as_of: { type: string, format: date-time }
+        status: { type: string, enum: [created, updated, failed] }
+        error: { type: string, nullable: true }
+      required: [product_id, as_of, status]
+    LatestBalanceBatchResponse:
+      type: object
+      properties:
+        total: { type: integer }
+        created: { type: integer }
+        updated: { type: integer }
+        failed: { type: integer }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/LatestBalanceResult' }
+      required: [total, created, updated, failed, items]
 paths:
   /institutions:
     get:
@@ -227,6 +263,9 @@ paths:
         - in: query
           name: type
           schema: { type: string, enum: [bank, broker, other] }
+        - in: query
+          name: name
+          schema: { type: string }
       responses:
         '200':
           description: OK
@@ -251,13 +290,13 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Institution' }
-  /institutions/{id}:
+  /institutions/{institution_id}:
     patch:
       tags: [deposit]
       summary: 更新机构
       parameters:
         - in: path
-          name: id
+          name: institution_id
           required: true
           schema: { type: integer, format: int64 }
       requestBody:
@@ -276,7 +315,7 @@ paths:
       summary: 删除机构（默认软删除）
       parameters:
         - in: path
-          name: id
+          name: institution_id
           required: true
           schema: { type: integer, format: int64 }
         - in: query
@@ -339,13 +378,13 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Product' }
-  /products/{id}:
+  /products/{product_id}:
     patch:
       tags: [deposit]
       summary: 更新金融产品
       parameters:
         - in: path
-          name: id
+          name: product_id
           required: true
           schema: { type: integer, format: int64 }
       requestBody:
@@ -364,7 +403,7 @@ paths:
       summary: 删除金融产品（默认软删除）
       parameters:
         - in: path
-          name: id
+          name: product_id
           required: true
           schema: { type: integer, format: int64 }
         - in: query
@@ -381,13 +420,13 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Product' }
-  /products/{id}/balances:
+  /products/{product_id}/balances:
     get:
       tags: [deposit]
       summary: 产品余额历史
       parameters:
         - in: path
-          name: id
+          name: product_id
           required: true
           schema: { type: integer, format: int64 }
         - $ref: '#/components/parameters/Page'
@@ -418,6 +457,26 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Balance' }
+  /products/{product_id}/status:
+    patch:
+      tags: [deposit]
+      summary: 更新产品状态
+      parameters:
+        - in: path
+          name: product_id
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProductStatusPatch' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProductStatusPatch' }
   /import/deposit:
     post:
       tags: [deposit]
@@ -433,3 +492,23 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ImportDepositResponse' }
+  /institutions/{institution_id}/products/balances/latest:
+    post:
+      tags: [deposit]
+      summary: 批量写入机构下产品最新余额
+      parameters:
+        - in: path
+          name: institution_id
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LatestBalanceBatchRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LatestBalanceBatchResponse' }

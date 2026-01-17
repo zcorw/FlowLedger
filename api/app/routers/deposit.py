@@ -150,6 +150,8 @@ class ProductPatch(BaseModel):
             raise ValueError("empty_name")
         return v2
 
+class ProductStatusPatch(BaseModel):
+    status: str = Field(..., pattern=r"^(active|inactive|closed)$")
 
 class ProductBaseOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -209,6 +211,35 @@ class BalancesOut(BaseModel):
     page_size: int
     has_next: bool
     data: List[BalanceOut]
+
+
+class LatestBalanceItem(BaseModel):
+    product_id: int
+    amount: Decimal = Field(..., ge=0)
+    as_of: Optional[datetime] = None
+
+    @validator("amount")
+    def _quantize_latest_amount(cls, v: Decimal):
+        return v.quantize(Decimal("0.000001"))
+
+
+class LatestBalanceBatchRequest(BaseModel):
+    items: List[LatestBalanceItem] = Field(default_factory=list)
+
+
+class LatestBalanceResult(BaseModel):
+    product_id: int
+    as_of: datetime
+    status: str
+    error: Optional[str] = None
+
+
+class LatestBalanceBatchResponse(BaseModel):
+    total: int
+    created: int
+    updated: int
+    failed: int
+    items: List[LatestBalanceResult]
 
 
 
@@ -486,6 +517,28 @@ def patch_product(
     db.refresh(prod)
     return _product_response(prod, inst)
 
+@router.patch("/products/{product_id}/status", response_model=ProductStatusPatch)
+def patch_product_status(
+    product_id: int,
+    payload: ProductStatusPatch,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    row = (
+        db.query(FinancialProduct, Institution)
+        .join(Institution, FinancialProduct.institution_id == Institution.id)
+        .filter(FinancialProduct.id == product_id, Institution.user_id == current_user.id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="product_not_found")
+    prod, inst = row
+
+    prod.status = payload.status
+    prod.updated_at = _now()
+    db.commit()
+    db.refresh(prod)
+    return _product_response(prod, inst)
 
 @router.delete("/products/{product_id}", response_model=ProductOut)
 def delete_product(
@@ -561,6 +614,136 @@ def list_balances(
         "has_next": (page * page_size) < total,
         "data": data,
     }
+
+
+@router.post(
+    "/institutions/{institution_id}/products/balances/latest",
+    status_code=201,
+    response_model=LatestBalanceBatchResponse,
+)
+def upsert_latest_balances(
+    institution_id: int,
+    payload: LatestBalanceBatchRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    inst = (
+        db.query(Institution)
+        .filter(Institution.id == institution_id, Institution.user_id == current_user.id)
+        .first()
+    )
+    if not inst:
+        raise HTTPException(status_code=404, detail="institution_not_found")
+
+    seen: set[int] = set()
+    dupes: set[int] = set()
+    for item in payload.items:
+        if item.product_id in seen:
+            dupes.add(item.product_id)
+        else:
+            seen.add(item.product_id)
+    if dupes:
+        dup_list = ",".join(str(pid) for pid in sorted(dupes))
+        raise HTTPException(status_code=422, detail=f"duplicate_product_id:{dup_list}")
+
+    product_ids = [item.product_id for item in payload.items]
+    products = (
+        db.query(FinancialProduct)
+        .filter(
+            FinancialProduct.institution_id == institution_id,
+            FinancialProduct.id.in_(product_ids),
+        )
+        .all()
+    )
+    prod_map = {p.id: p for p in products}
+
+    results: List[LatestBalanceResult] = []
+    for item in payload.items:
+        prod = prod_map.get(item.product_id)
+        if not prod:
+            results.append(
+                LatestBalanceResult(
+                    product_id=item.product_id,
+                    as_of=item.as_of or _now(),
+                    status="failed",
+                    error="product_not_found",
+                )
+            )
+            continue
+
+        as_of = item.as_of or _now()
+        existing = (
+            db.query(ProductBalance)
+            .filter(ProductBalance.product_id == prod.id, ProductBalance.as_of == as_of)
+            .first()
+        )
+        now = _now()
+        if existing:
+            existing.amount = item.amount
+            existing.updated_at = now
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+                results.append(
+                    LatestBalanceResult(
+                        product_id=prod.id,
+                        as_of=as_of,
+                        status="failed",
+                        error="balance_update_failed",
+                    )
+                )
+                continue
+            results.append(
+                LatestBalanceResult(
+                    product_id=prod.id,
+                    as_of=as_of,
+                    status="updated",
+                )
+            )
+            continue
+
+        bal = ProductBalance(
+            product_id=prod.id,
+            amount=item.amount,
+            as_of=as_of,
+            created_at=now,
+            updated_at=now,
+        )
+        try:
+            db.add(bal)
+            db.commit()
+        except Exception:
+            db.rollback()
+            results.append(
+                LatestBalanceResult(
+                    product_id=prod.id,
+                    as_of=as_of,
+                    status="failed",
+                    error="balance_create_failed",
+                )
+            )
+            continue
+
+        results.append(
+            LatestBalanceResult(
+                product_id=prod.id,
+                as_of=as_of,
+                status="created",
+            )
+        )
+
+    total = len(results)
+    created = sum(1 for r in results if r.status == "created")
+    updated = sum(1 for r in results if r.status == "updated")
+    failed = sum(1 for r in results if r.status == "failed")
+    return LatestBalanceBatchResponse(
+        total=total,
+        created=created,
+        updated=updated,
+        failed=failed,
+        items=results,
+    )
 
 
 @router.post("/products/{product_id}/balances", status_code=201, response_model=BalanceOut)
