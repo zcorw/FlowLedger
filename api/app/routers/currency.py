@@ -4,13 +4,19 @@ from datetime import datetime, timezone, date as date_cls
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field, validator, ConfigDict
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
 from ..models import Currency, ExchangeRate
+from ..importers.exchange_rate_excel import parse_exchange_rate_import_file
+from ..schemas.exchange_rate_import import (
+    ImportExchangeRateRequest,
+    ImportExchangeRateResponse,
+    ImportExchangeRateResult,
+)
 from ..tasks.fetch_fx import sync_exchange_rates
 
 
@@ -23,6 +29,10 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class CurrencyOut(BaseModel):
@@ -252,6 +262,152 @@ def convert_amount(req: Request, body: ConvertRequest, db: Session = Depends(get
     if cache_key:
         _idem_cache[cache_key] = resp.dict()
     return resp
+
+
+def _ensure_unique_rate_keys(items):
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for item in items:
+        key = f"{item.base}:{item.quote}:{item.rate_date.isoformat()}"
+        if key in seen:
+            duplicates.add(key)
+        else:
+            seen.add(key)
+    if duplicates:
+        dup_list = ",".join(sorted(duplicates))
+        raise HTTPException(status_code=422, detail=f"duplicate_rate_key:{dup_list}")
+
+
+def _import_exchange_rates(
+    payload: ImportExchangeRateRequest,
+    db: Session,
+) -> ImportExchangeRateResponse:
+    _ensure_unique_rate_keys(payload.items)
+
+    code_rows = db.query(Currency.code).all()
+    codes = {row[0] for row in code_rows}
+
+    results: List[ImportExchangeRateResult] = []
+    for item in payload.items:
+        base = item.base
+        quote = item.quote
+
+        if base == quote:
+            results.append(
+                ImportExchangeRateResult(
+                    base=base,
+                    quote=quote,
+                    rate_date=item.rate_date,
+                    status="failed",
+                    error="same_currency",
+                )
+            )
+            continue
+        if base not in codes or quote not in codes:
+            results.append(
+                ImportExchangeRateResult(
+                    base=base,
+                    quote=quote,
+                    rate_date=item.rate_date,
+                    status="failed",
+                    error="unknown_currency",
+                )
+            )
+            continue
+
+        existing = (
+            db.query(ExchangeRate)
+            .filter(
+                ExchangeRate.base_code == base,
+                ExchangeRate.quote_code == quote,
+                ExchangeRate.rate_date == item.rate_date,
+            )
+            .first()
+        )
+        now = _now()
+        if existing:
+            existing.rate = item.rate
+            if item.source is not None:
+                existing.source = item.source
+            existing.updated_at = now
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+                results.append(
+                    ImportExchangeRateResult(
+                        base=base,
+                        quote=quote,
+                        rate_date=item.rate_date,
+                        status="failed",
+                        error="rate_update_failed",
+                    )
+                )
+                continue
+            results.append(
+                ImportExchangeRateResult(
+                    base=base,
+                    quote=quote,
+                    rate_date=item.rate_date,
+                    status="updated",
+                )
+            )
+            continue
+
+        rate = ExchangeRate(
+            base_code=base,
+            quote_code=quote,
+            rate_date=item.rate_date,
+            rate=item.rate,
+            source=item.source or "import",
+            created_at=now,
+            updated_at=now,
+        )
+        try:
+            db.add(rate)
+            db.commit()
+        except Exception:
+            db.rollback()
+            results.append(
+                ImportExchangeRateResult(
+                    base=base,
+                    quote=quote,
+                    rate_date=item.rate_date,
+                    status="failed",
+                    error="rate_create_failed",
+                )
+            )
+            continue
+
+        results.append(
+            ImportExchangeRateResult(
+                base=base,
+                quote=quote,
+                rate_date=item.rate_date,
+                status="created",
+            )
+        )
+
+    total = len(results)
+    created = sum(1 for r in results if r.status == "created")
+    updated = sum(1 for r in results if r.status == "updated")
+    failed = sum(1 for r in results if r.status == "failed")
+    return ImportExchangeRateResponse(
+        total=total,
+        created=created,
+        updated=updated,
+        failed=failed,
+        items=results,
+    )
+
+
+@router.post("/import/exchange-rates", status_code=201, response_model=ImportExchangeRateResponse)
+def import_exchange_rates(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    payload = parse_exchange_rate_import_file(file)
+    return _import_exchange_rates(payload, db)
 
 
 class CurrencyUpsert(BaseModel):
