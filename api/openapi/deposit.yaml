@@ -260,7 +260,38 @@ components:
           type: array
           items: { $ref: '#/components/schemas/LatestBalanceResult' }
       required: [total, created, updated, failed, items]
+    MonthlyAssetPoint:
+      type: object
+      properties:
+        month: { type: string, format: date }
+        total_amount: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
+      required: [month, total_amount]
+    MonthlyAssetTrend:
+      type: object
+      properties:
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/MonthlyAssetPoint' }
+      required: [currency, data]
 paths:
+  /assets/monthly:
+    get:
+      tags: [deposit]
+      summary: 每月总资产变化（按用户基准货币）
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MonthlyAssetTrend' }
   /institutions:
     get:
       tags: [deposit]

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, validator
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from ..auth import resolve_user_id
 from ..db import SessionLocal
 from ..importers.deposit_excel import parse_deposit_import_file
-from ..models import Currency, FinancialProduct, Institution, ProductBalance, User
+from ..models import Currency, FinancialProduct, Institution, ProductBalance, User, UserPreference
 from ..schemas.deposit_import import (
     ImportBalanceResult,
     ImportDepositRequest,
@@ -251,6 +251,15 @@ class LatestBalanceBatchResponse(BaseModel):
     updated: int
     failed: int
     items: List[LatestBalanceResult]
+
+class MonthlyAssetPoint(BaseModel):
+    month: date
+    amount: Decimal
+
+
+class MonthlyAssetTrend(BaseModel):
+    currency: str
+    data: List[MonthlyAssetPoint]
 
 
 
@@ -583,6 +592,92 @@ def delete_product(
     db.commit()
     db.refresh(prod)
     return _product_response(prod, inst)
+
+
+@router.get("/assets/monthly", response_model=MonthlyAssetTrend)
+def get_monthly_assets(
+    from_dt: Optional[datetime] = Query(None, alias="from"),
+    to_dt: Optional[datetime] = Query(None, alias="to"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    pref = db.query(UserPreference).filter(UserPreference.user_id == current_user.id).first()
+    if not pref:
+        raise HTTPException(status_code=404, detail="user_pref_not_found")
+    base_currency = pref.base_currency
+
+    sql = text(
+        """
+        WITH monthly_last AS (
+          SELECT
+            pb.product_id,
+            fp.currency,
+            date_trunc('month', pb.as_of)::date AS month_start,
+            pb.as_of,
+            pb.amount,
+            row_number() OVER (
+              PARTITION BY pb.product_id, date_trunc('month', pb.as_of)
+              ORDER BY pb.as_of DESC
+            ) AS rn
+          FROM deposit.product_balances pb
+          JOIN deposit.financial_products fp ON fp.id = pb.product_id
+          JOIN deposit.institutions i ON i.id = fp.institution_id
+          WHERE i.user_id = :user_id
+            AND (:from_dt IS NULL OR pb.as_of >= :from_dt)
+            AND (:to_dt IS NULL OR pb.as_of <= :to_dt)
+            AND fp.status != 'closed'
+        )
+        SELECT
+          m.month_start AS month,
+          SUM(m.amount * fx.fx_rate) AS total_amount
+        FROM monthly_last m
+        LEFT JOIN LATERAL (
+          SELECT
+            CASE
+              WHEN m.currency = :target_code THEN 1::numeric
+              ELSE COALESCE(
+                (
+                  SELECT er.rate
+                  FROM currency.exchange_rates er
+                  WHERE er.base_code = m.currency
+                    AND er.quote_code = :target_code
+                    AND er.rate_date <= m.as_of::date
+                  ORDER BY er.rate_date DESC
+                  LIMIT 1
+                ),
+                (
+                  SELECT 1 / er2.rate
+                  FROM currency.exchange_rates er2
+                  WHERE er2.base_code = :target_code
+                    AND er2.quote_code = m.currency
+                    AND er2.rate_date <= m.as_of::date
+                  ORDER BY er2.rate_date DESC
+                  LIMIT 1
+                )
+              )
+            END AS fx_rate
+        ) fx ON true
+        WHERE m.rn = 1
+          AND fx.fx_rate IS NOT NULL
+        GROUP BY m.month_start
+        ORDER BY m.month_start
+        """
+    )
+    rows = db.execute(
+        sql,
+        {
+            "user_id": current_user.id,
+            "from_dt": from_dt,
+            "to_dt": to_dt,
+            "target_code": base_currency,
+        },
+    ).mappings()
+
+    data = [
+        MonthlyAssetPoint(month=row["month"], amount=row["total_amount"])
+        for row in rows
+    ]
+    return MonthlyAssetTrend(currency=base_currency, data=data).model_dump()
 
 
 @router.get("/products/{product_id}/balances", response_model=BalancesOut)
