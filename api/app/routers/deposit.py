@@ -213,6 +213,17 @@ class BalancesOut(BaseModel):
     data: List[BalanceOut]
 
 
+class BalancePatch(BaseModel):
+    amount: Optional[Decimal] = Field(default=None, ge=0)
+    as_of: Optional[datetime] = None
+
+    @validator("amount")
+    def _quantize_patch_amount(cls, v: Optional[Decimal]):
+        if v is None:
+            return v
+        return v.quantize(Decimal("0.000001"))
+
+
 class LatestBalanceItem(BaseModel):
     product_id: int
     amount: Decimal = Field(..., ge=0)
@@ -781,6 +792,74 @@ def create_balance(
     db.add(bal)
     db.commit()
     db.refresh(bal)
+    return BalanceOut.model_validate(bal, from_attributes=True).model_dump()
+
+
+@router.patch("/products/{product_id}/balances/{balance_id}", response_model=BalanceOut)
+def patch_balance(
+    product_id: int,
+    balance_id: int,
+    payload: BalancePatch,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    row = (
+        db.query(ProductBalance, FinancialProduct)
+        .join(FinancialProduct, ProductBalance.product_id == FinancialProduct.id)
+        .join(Institution, FinancialProduct.institution_id == Institution.id)
+        .filter(
+            ProductBalance.id == balance_id,
+            ProductBalance.product_id == product_id,
+            Institution.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="balance_not_found")
+    bal, _ = row
+
+    if payload.as_of is not None and payload.as_of != bal.as_of:
+        existing = (
+            db.query(ProductBalance)
+            .filter(ProductBalance.product_id == product_id, ProductBalance.as_of == payload.as_of)
+            .first()
+        )
+        if existing:
+            raise HTTPException(status_code=409, detail="balance_exists")
+        bal.as_of = payload.as_of
+    if payload.amount is not None:
+        bal.amount = payload.amount
+
+    bal.updated_at = _now()
+    db.commit()
+    db.refresh(bal)
+    return BalanceOut.model_validate(bal, from_attributes=True).model_dump()
+
+
+@router.delete("/products/{product_id}/balances/{balance_id}", response_model=BalanceOut)
+def delete_balance(
+    product_id: int,
+    balance_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    row = (
+        db.query(ProductBalance, FinancialProduct)
+        .join(FinancialProduct, ProductBalance.product_id == FinancialProduct.id)
+        .join(Institution, FinancialProduct.institution_id == Institution.id)
+        .filter(
+            ProductBalance.id == balance_id,
+            ProductBalance.product_id == product_id,
+            Institution.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="balance_not_found")
+    bal, _ = row
+
+    db.delete(bal)
+    db.commit()
     return BalanceOut.model_validate(bal, from_attributes=True).model_dump()
 
 

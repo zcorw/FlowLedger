@@ -116,6 +116,11 @@ components:
         amount: { type: string, pattern: '^\d+(\.\d{1,6})?$', minimum: 0 }
         as_of: { type: string, format: date-time }
       required: [amount, as_of]
+    BalancePatch:
+      type: object
+      properties:
+        amount: { type: string, pattern: '^\d+(\.\d{1,6})?$', minimum: 0 }
+        as_of: { type: string, format: date-time }
     BalanceList:
       type: object
       properties:
@@ -126,6 +131,9 @@ components:
         data:
           type: array
           items: { $ref: '#/components/schemas/Balance' }
+    Error:
+      type: object
+      properties: { code: { type: string }, message: { type: string }, details: {} }
     ImportInstitutionItem:
       type: object
       properties:
@@ -457,6 +465,60 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Balance' }
+  /products/{product_id}/balances/{balance_id}:
+    patch:
+      tags: [deposit]
+      summary: 更新余额快照
+      parameters:
+        - in: path
+          name: product_id
+          required: true
+          schema: { type: integer, format: int64 }
+        - in: path
+          name: balance_id
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BalancePatch' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Balance' }
+        '404':
+          description: balance_not_found
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '409':
+          description: balance_exists
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '422':
+          description: invalid_payload
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    delete:
+      tags: [deposit]
+      summary: 删除余额快照
+      parameters:
+        - in: path
+          name: product_id
+          required: true
+          schema: { type: integer, format: int64 }
+        - in: path
+          name: balance_id
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Balance' }
+        '404':
+          description: balance_not_found
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
   /products/{product_id}/status:
     patch:
       tags: [deposit]
