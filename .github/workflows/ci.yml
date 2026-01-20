@@ -30,7 +30,7 @@ jobs:
             set -euo pipefail
             echo "USER=$(whoami)"
             echo "HOME=$HOME"
-            echo "DIR=${{ secrets.APP_DIR }}"
+            ls -la "${{ secrets.APP_DIR }}"
 
             cd "${{ secrets.APP_DIR }}"
             pwd
@@ -39,7 +39,6 @@ jobs:
             echo "== Git sync =="
             git fetch --all --prune
             git reset --hard origin/main
-            git clean -fd
 
             echo "== Docker compose up =="
             cd infra
