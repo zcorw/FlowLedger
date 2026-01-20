@@ -28,13 +28,7 @@ jobs:
           command_timeout: 30m
           script: |
             set -euo pipefail
-            echo "USER=$(whoami)"
-            echo "HOME=$HOME"
-            ls -la "${{ secrets.APP_DIR }}"
-
             cd "${{ secrets.APP_DIR }}"
-            pwd
-            ls -la
 
             echo "== Git sync =="
             git fetch --all --prune
