@@ -30,13 +30,12 @@ jobs:
             set -euo pipefail
             echo "USER=$(whoami)"
             echo "HOME=$HOME"
-            pwd
-            ls -la
+            echo "DIR=${{ secrets.APP_DIR }}"
 
             cd "${{ secrets.APP_DIR }}"
             pwd
             ls -la
-            
+
             echo "== Git sync =="
             git fetch --all --prune
             git reset --hard origin/main
