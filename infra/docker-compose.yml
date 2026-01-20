@@ -89,7 +89,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql://flow_ledger:flow_ledger@db:5432/flow_ledger}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     volumes:
       - ../api:/app
     networks:

@@ -9,7 +9,7 @@ load_dotenv()
 app = FastAPI(title="Flow-Ledger API (Baseline)")
 
 
-@app.get("/healthz")
+@app.get("/v1/healthz")
 def healthz():
     return {"ok": True}
 
