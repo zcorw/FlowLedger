@@ -85,8 +85,8 @@ services:
     env_file:
       - ../.env
     environment:
-      # fallback when .env is missing during CI
-      DATABASE_URL: ${DATABASE_URL:-postgresql://flow_ledger:flow_ledger@db:5432/flow_ledger}
+      # Prefer POSTGRES_* as the single source of truth; DATABASE_URL is optional.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-flow_ledger}:${POSTGRES_PASSWORD:-flow_ledger}@db:5432/${POSTGRES_DB:-flow_ledger}}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "${API_PORT:-8000}:8000"
@@ -109,7 +109,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       BOT_STATE_PATH: ${BOT_STATE_PATH:-/app/data/bot_state.json}
     ports:
-      - "9080:7000"
+      - "${BOT_PORT:-9080}:7000"
     restart: unless-stopped
     volumes:
       - ../bot:/app
