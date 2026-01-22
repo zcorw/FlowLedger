@@ -4,19 +4,24 @@ from datetime import datetime, timezone, date as date_cls
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from pathlib import Path
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, validator, ConfigDict
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
 from ..models import Currency, ExchangeRate
-from ..importers.exchange_rate_excel import parse_exchange_rate_import_file
+from ..import_tasks import create_task, get_task, save_upload_file, update_task
+from ..importers.exchange_rate_excel import parse_exchange_rate_import_path
 from ..schemas.exchange_rate_import import (
     ImportExchangeRateRequest,
     ImportExchangeRateResponse,
     ImportExchangeRateResult,
 )
+from ..schemas.import_task import ImportTaskCreateResponse, ImportTaskStatus
 from ..tasks.fetch_fx import sync_exchange_rates
 
 
@@ -33,6 +38,45 @@ def get_db():
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _ensure_xlsx_upload(upload: UploadFile) -> str:
+    filename = upload.filename or ""
+    if not filename.lower().endswith(".xlsx"):
+        raise HTTPException(status_code=422, detail="invalid_file_type")
+    return filename
+
+
+def _public_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(task)
+    payload.pop("owner_id", None)
+    return payload
+
+
+def _process_exchange_rate_import_task(task_id: str, file_path: str) -> None:
+    update_task(task_id, status="processing", stage="parsing", progress=10)
+    db = SessionLocal()
+    try:
+        payload = parse_exchange_rate_import_path(Path(file_path))
+        update_task(task_id, stage="importing", progress=50)
+        result = _import_exchange_rates(payload, db)
+        update_task(
+            task_id,
+            status="succeeded",
+            stage="completed",
+            progress=100,
+            result=jsonable_encoder(result),
+        )
+    except HTTPException as exc:
+        update_task(task_id, status="failed", stage="failed", error=str(exc.detail))
+    except Exception:
+        update_task(task_id, status="failed", stage="failed", error="import_failed")
+    finally:
+        db.close()
+        try:
+            Path(file_path).unlink()
+        except FileNotFoundError:
+            pass
 
 
 class CurrencyOut(BaseModel):
@@ -401,13 +445,35 @@ def _import_exchange_rates(
     )
 
 
-@router.post("/import/exchange-rates", status_code=201, response_model=ImportExchangeRateResponse)
-def import_exchange_rates(
+@router.post(
+    "/import/exchange-rates",
+    status_code=202,
+    response_model=ImportTaskCreateResponse,
+)
+def upload_exchange_rates(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    db: Session = Depends(get_db),
 ):
-    payload = parse_exchange_rate_import_file(file)
-    return _import_exchange_rates(payload, db)
+    filename = _ensure_xlsx_upload(file)
+    stored_path = save_upload_file(file)
+    task_id = create_task(
+        "exchange_rate_import",
+        filename=filename,
+        size=stored_path.stat().st_size,
+    )
+    background_tasks.add_task(_process_exchange_rate_import_task, task_id, str(stored_path))
+    return ImportTaskCreateResponse(task_id=task_id)
+
+
+@router.get(
+    "/import/exchange-rates/tasks/{task_id}",
+    response_model=ImportTaskStatus,
+)
+def get_exchange_rate_import_task(task_id: str):
+    task = get_task(task_id)
+    if not task or task.get("kind") != "exchange_rate_import":
+        raise HTTPException(status_code=404, detail="task_not_found")
+    return _public_task(task)
 
 
 class CurrencyUpsert(BaseModel):

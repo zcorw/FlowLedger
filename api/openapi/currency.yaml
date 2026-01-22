@@ -129,6 +129,31 @@ components:
         converted: { type: string }
         effective_date: { type: string, format: date }
       required: [amount, from_currency, to_currency, rate, converted, effective_date]
+    ImportExchangeRateUpload:
+      type: object
+      properties:
+        file: { type: string, format: binary }
+      required: [file]
+    ImportTaskCreateResponse:
+      type: object
+      properties:
+        task_id: { type: string }
+      required: [task_id]
+    ImportTaskStatus:
+      type: object
+      properties:
+        task_id: { type: string }
+        kind: { type: string }
+        status: { type: string, enum: [queued, processing, succeeded, failed] }
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        stage: { type: string, nullable: true }
+        filename: { type: string, nullable: true }
+        size: { type: integer, nullable: true }
+        result: { type: object, nullable: true }
+        error: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [task_id, kind, status, progress, created_at, updated_at]
     BulkUpsertResult:
       type: object
       properties:
@@ -308,6 +333,36 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+  /import/exchange-rates:
+    post:
+      tags: [exchange-rate]
+      summary: 批量导入汇率
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: '#/components/schemas/ImportExchangeRateUpload' }
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportTaskCreateResponse' }
+  /import/exchange-rates/tasks/{task_id}:
+    get:
+      tags: [exchange-rate]
+      summary: 查询导入任务进度
+      parameters:
+        - in: path
+          name: task_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportTaskStatus' }
   /convert:
     post:
       tags: [convert]

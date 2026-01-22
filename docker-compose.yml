@@ -83,10 +83,24 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-flow_ledger}:${POSTGRES_PASSWORD:-flow_ledger}@db:5432/${POSTGRES_DB:-flow_ledger}
       # 根据实现选择 FastAPI/Flask；此处仅预留占位
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      UPLOAD_DIR: ${UPLOAD_DIR:-/data/uploads}
     volumes:
       - ./:/app
+      - ${API_DATA_DIR:-./data/api}:/data
     working_dir: /app
     command: ["/bin/sh", "-lc", "echo 'API container is ready for development.' && tail -f /dev/null"]
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/healthz')\""]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
     networks:
       - flow_net
 

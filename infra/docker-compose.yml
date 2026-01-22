@@ -88,12 +88,23 @@ services:
       # Prefer POSTGRES_* as the single source of truth; DATABASE_URL is optional.
       DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-flow_ledger}:${POSTGRES_PASSWORD:-flow_ledger}@db:5432/${POSTGRES_DB:-flow_ledger}}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      UPLOAD_DIR: ${UPLOAD_DIR:-/data/uploads}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
       - ../api:/app
+      - ${API_DATA_DIR:-../data}:/data
     networks:
       - backend
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/healthz')\""]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    cpus: "1.0"
+    mem_limit: 512M
 
   bot:
     build:

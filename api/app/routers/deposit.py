@@ -4,14 +4,18 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from pathlib import Path
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ConfigDict, Field, validator
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from ..auth import resolve_user_id
 from ..db import SessionLocal
-from ..importers.deposit_excel import parse_deposit_import_file
+from ..import_tasks import create_task, get_task, save_upload_file, update_task
+from ..importers.deposit_excel import parse_deposit_import_path
 from ..models import Currency, FinancialProduct, Institution, ProductBalance, User, UserPreference
 from ..schemas.deposit_import import (
     ImportBalanceResult,
@@ -21,6 +25,7 @@ from ..schemas.deposit_import import (
     ImportProductResult,
     ImportSectionResult,
 )
+from ..schemas.import_task import ImportTaskCreateResponse, ImportTaskStatus
 
 router = APIRouter(prefix="/v1", tags=["deposit"])
 
@@ -37,6 +42,49 @@ def get_db():
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _ensure_xlsx_upload(upload: UploadFile) -> str:
+    filename = upload.filename or ""
+    if not filename.lower().endswith(".xlsx"):
+        raise HTTPException(status_code=422, detail="invalid_file_type")
+    return filename
+
+
+def _public_task(task: dict) -> dict:
+    payload = dict(task)
+    payload.pop("owner_id", None)
+    return payload
+
+
+def _process_deposit_import_task(task_id: str, file_path: str, user_id: int) -> None:
+    update_task(task_id, status="processing", stage="parsing", progress=10)
+    db = SessionLocal()
+    try:
+        user = db.get(User, user_id)
+        if not user:
+            update_task(task_id, status="failed", stage="failed", error="user_not_found")
+            return
+        payload = parse_deposit_import_path(Path(file_path))
+        update_task(task_id, stage="importing", progress=50)
+        result = _import_deposit_payload(payload, db, user)
+        update_task(
+            task_id,
+            status="succeeded",
+            stage="completed",
+            progress=100,
+            result=jsonable_encoder(result),
+        )
+    except HTTPException as exc:
+        update_task(task_id, status="failed", stage="failed", error=str(exc.detail))
+    except Exception:
+        update_task(task_id, status="failed", stage="failed", error="import_failed")
+    finally:
+        db.close()
+        try:
+            Path(file_path).unlink()
+        except FileNotFoundError:
+            pass
 
 
 def get_current_user(
@@ -1192,11 +1240,41 @@ def _import_deposit_payload(
     )
 
 
-@router.post("/import/deposit", status_code=201, response_model=ImportDepositResponse)
-def import_deposit(
+@router.post(
+    "/import/deposit",
+    status_code=202,
+    response_model=ImportTaskCreateResponse,
+)
+def upload_deposit(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    payload = parse_deposit_import_file(file)
-    return _import_deposit_payload(payload, db, current_user)
+    filename = _ensure_xlsx_upload(file)
+    stored_path = save_upload_file(file)
+    task_id = create_task(
+        "deposit_import",
+        filename=filename,
+        size=stored_path.stat().st_size,
+        owner_id=current_user.id,
+    )
+    background_tasks.add_task(
+        _process_deposit_import_task,
+        task_id,
+        str(stored_path),
+        current_user.id,
+    )
+    return ImportTaskCreateResponse(task_id=task_id)
+
+
+@router.get(
+    "/import/deposit/tasks/{task_id}",
+    response_model=ImportTaskStatus,
+)
+def get_deposit_import_task(task_id: str, current_user: User = Depends(get_current_user)):
+    task = get_task(task_id)
+    if not task or task.get("kind") != "deposit_import":
+        raise HTTPException(status_code=404, detail="task_not_found")
+    if task.get("owner_id") != current_user.id:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    return _public_task(task)

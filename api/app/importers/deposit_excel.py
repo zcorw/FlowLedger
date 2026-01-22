@@ -5,6 +5,8 @@ from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from typing import Any, Dict, List, Optional
 
+from pathlib import Path
+
 from fastapi import HTTPException, UploadFile
 from openpyxl import load_workbook
 from pydantic import ValidationError
@@ -63,11 +65,10 @@ def _read_sheet_rows(ws, headers: List[str]) -> List[Dict[str, Any]]:
     return rows
 
 
-def parse_deposit_import_file(upload: UploadFile) -> ImportDepositRequest:
-    if not upload.filename or not upload.filename.lower().endswith(".xlsx"):
+def _parse_deposit_import_content(filename: str, content: bytes) -> ImportDepositRequest:
+    if not filename or not filename.lower().endswith(".xlsx"):
         raise HTTPException(status_code=422, detail="invalid_file_type")
 
-    content = upload.file.read()
     try:
         wb = load_workbook(BytesIO(content), data_only=True)
     except Exception as exc:
@@ -146,3 +147,13 @@ def parse_deposit_import_file(upload: UploadFile) -> ImportDepositRequest:
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
+
+def parse_deposit_import_file(upload: UploadFile) -> ImportDepositRequest:
+    content = upload.file.read()
+    return _parse_deposit_import_content(upload.filename or "", content)
+
+
+def parse_deposit_import_path(path: Path) -> ImportDepositRequest:
+    content = path.read_bytes()
+    return _parse_deposit_import_content(path.name, content)
