@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from ..auth import resolve_user_id
 from ..db import SessionLocal
 from ..models import User, UserPreference
+from app.db.shared_sql import get_exchange_rate_by_as_of
 
 router = APIRouter(prefix="/v1/custom", tags=["custom"])
 
@@ -72,29 +73,14 @@ def list_institution_asset_changes(
             pb.as_of,
             pb.amount,
             fp.currency,
-            CASE
-              WHEN fp.currency = :target_code THEN 1::numeric
-              ELSE COALESCE(
-                (
-                  SELECT er.rate
-                  FROM currency.exchange_rates er
-                  WHERE er.base_code = fp.currency
-                    AND er.quote_code = :target_code
-                    AND er.rate_date <= pb.as_of::date
-                  ORDER BY er.rate_date DESC
-                  LIMIT 1
-                ),
-                (
-                  SELECT 1 / er2.rate
-                  FROM currency.exchange_rates er2
-                  WHERE er2.base_code = :target_code
-                    AND er2.quote_code = fp.currency
-                    AND er2.rate_date <= pb.as_of::date
-                  ORDER BY er2.rate_date DESC
-                  LIMIT 1
-                )
-              )
-            END AS fx_rate
+        """
+        + get_exchange_rate_by_as_of(
+            code=":target_code",
+            as_of="pb",
+            column="fx_rate",
+            currency="fp",
+        )
+        + """
           FROM deposit.product_balances pb
           JOIN deposit.financial_products fp ON fp.id = pb.product_id
           JOIN deposit.institutions i ON i.id = fp.institution_id

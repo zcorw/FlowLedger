@@ -26,6 +26,7 @@ from ..schemas.deposit_import import (
     ImportSectionResult,
 )
 from ..schemas.import_task import ImportTaskCreateResponse, ImportTaskStatus
+from app.db.shared_sql import get_exchange_rate_by_as_of
 
 router = APIRouter(prefix="/v1", tags=["deposit"])
 
@@ -681,29 +682,14 @@ def get_monthly_assets(
         FROM monthly_last m
         LEFT JOIN LATERAL (
           SELECT
-            CASE
-              WHEN m.currency = :target_code THEN 1::numeric
-              ELSE COALESCE(
-                (
-                  SELECT er.rate
-                  FROM currency.exchange_rates er
-                  WHERE er.base_code = m.currency
-                    AND er.quote_code = :target_code
-                    AND er.rate_date <= m.as_of::date
-                  ORDER BY er.rate_date DESC
-                  LIMIT 1
-                ),
-                (
-                  SELECT 1 / er2.rate
-                  FROM currency.exchange_rates er2
-                  WHERE er2.base_code = :target_code
-                    AND er2.quote_code = m.currency
-                    AND er2.rate_date <= m.as_of::date
-                  ORDER BY er2.rate_date DESC
-                  LIMIT 1
-                )
-              )
-            END AS fx_rate
+        """
+        + get_exchange_rate_by_as_of(
+            code=":target_code",
+            as_of="m",
+            column="fx_rate",
+            currency="m",
+        )
+        + """
         ) fx ON true
         WHERE m.rn = 1
           AND fx.fx_rate IS NOT NULL
