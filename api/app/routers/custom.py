@@ -106,11 +106,11 @@ def list_institution_asset_changes(
             institution_id,
             institution_name,
             institution_type,
-            as_of,
+            as_of::date AS as_of,
             SUM(amount * fx_rate) AS total_amount
           FROM balance_fx
           WHERE fx_rate IS NOT NULL
-          GROUP BY institution_id, institution_name, institution_type, as_of
+          GROUP BY institution_id, institution_name, institution_type, as_of::date
         ),
         ranked AS (
           SELECT

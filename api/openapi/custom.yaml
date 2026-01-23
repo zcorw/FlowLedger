@@ -1,0 +1,66 @@
+openapi: 3.1.0
+info:
+  title: Flow-Ledger Custom API
+  version: 1.0.0
+  description: 自定义统计与聚合接口
+servers:
+  - url: https://api.example.com/v1
+security:
+  - OAuth2: [read:deposit]
+components:
+  securitySchemes:
+    OAuth2:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.example.com/oauth/authorize
+          tokenUrl: https://auth.example.com/oauth/token
+          scopes:
+            read:deposit: 读取存款/资产资源
+  schemas:
+    InstitutionAssetChange:
+      type: object
+      properties:
+        institution_id: { type: integer, format: int64 }
+        institution_name: { type: string }
+        institution_type: { type: string, enum: [bank, broker, other] }
+        current_as_of: { type: string, format: date-time }
+        previous_as_of: { type: string, format: date-time }
+        current_total: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
+        previous_total: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
+        delta: { type: string, pattern: '^-?\d+(\.\d{1,6})?$' }
+      required:
+        [
+          institution_id,
+          institution_name,
+          institution_type,
+          current_as_of,
+          previous_as_of,
+          current_total,
+          previous_total,
+          delta,
+        ]
+    InstitutionAssetChangeList:
+      type: object
+      properties:
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        total: { type: integer }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/InstitutionAssetChange' }
+      required: [currency, total, data]
+paths:
+  /custom/institutions/assets/changes:
+    get:
+      tags: [custom]
+      summary: 机构资产变动排行（与上次记录对比）
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 200, default: 10 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InstitutionAssetChangeList' }
