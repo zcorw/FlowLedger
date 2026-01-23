@@ -18,10 +18,10 @@ if __package__ in (None, ""):
     ROOT = pathlib.Path(__file__).resolve().parents[2]
     sys.path.append(str(ROOT))
     from app.db import SessionLocal  # type: ignore
-    from app.models import Currency, ExchangeRate  # type: ignore
+    from app.models import Currency, ExchangeRate, FinancialProduct  # type: ignore
 else:
     from ..db import SessionLocal
-    from ..models import Currency, ExchangeRate
+    from ..models import Currency, ExchangeRate, FinancialProduct
 
 load_dotenv()
 
@@ -63,6 +63,18 @@ def _fetch_rates(base: str) -> Tuple[date_cls, Dict[str, Decimal]]:
 
 def _load_currency_codes(db: Session) -> Iterable[str]:
     return db.scalars(select(Currency.code)).all()
+
+
+def _load_asset_currency_codes(db: Session) -> list[str]:
+    rows = (
+        db.scalars(
+            select(FinancialProduct.currency)
+            .where(FinancialProduct.status == "active")
+            .distinct()
+        )
+        .all()
+    )
+    return [row.upper() for row in rows if row]
 
 
 def _upsert_rates(
@@ -138,12 +150,61 @@ def sync_exchange_rates(db: Session, *, base: str | None = None) -> Dict[str, An
     }
 
 
+def sync_exchange_rates_for_assets(
+    db: Session,
+    *,
+    target: str = "CNY",
+) -> Dict[str, Any]:
+    """Fetch and upsert FX rates from asset currencies to target currency."""
+    target_code = target.upper()
+    currency_codes = {c.upper() for c in _load_currency_codes(db)}
+    if target_code not in currency_codes:
+        raise RuntimeError(f"Target currency {target_code} not found in currency.currencies")
+
+    asset_codes = {c.upper() for c in _load_asset_currency_codes(db)}
+    asset_codes = {c for c in asset_codes if c in currency_codes}
+    bases = sorted(asset_codes)
+    results = []
+    total_written = 0
+    total_missing = 0
+
+    for base_code in bases:
+        if base_code == target_code:
+            continue
+        rate_date, rates = _fetch_rates(base_code)
+        summary = _upsert_rates(
+            db,
+            base=base_code,
+            rate_date=rate_date,
+            rates=rates,
+            target_quotes=[target_code],
+        )
+        results.append(
+            {
+                "base": base_code,
+                "rate_date": rate_date.isoformat(),
+                "written": summary["written"],
+                "missing": summary["missing"],
+            }
+        )
+        total_written += summary["written"]
+        total_missing += summary["missing"]
+
+    return {
+        "target": target_code,
+        "bases": bases,
+        "written": total_written,
+        "missing": total_missing,
+        "results": results,
+    }
+
+
 def main() -> None:
     db = SessionLocal()
     try:
-        summary = sync_exchange_rates(db, base=FX_BASE)
+        summary = sync_exchange_rates_for_assets(db, target="CNY")
         print(
-            f"[fx-sync] base={summary['base']} rate_date={summary['rate_date']} "
+            f"[fx-sync] target={summary['target']} bases={len(summary['bases'])} "
             f"written={summary['written']} missing={summary['missing']}"
         )
     finally:

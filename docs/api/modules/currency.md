@@ -70,9 +70,8 @@
   - 表：`currency.currencies(code, name, symbol, scale, created_at, updated_at)`；
   - 约束：`code` 主键；`scale` 0..6；更新触发器自动刷新 `updated_at`。
 
-## 10. 日志拉取汇率（sawazahmed0/exchange-api�?
-- 模型：用 USD 为基准，�?`currency.currencies` 中的币种为“基准清单〝出有汇率得到为其他币种极，入库到最�?`rate_date`/`rate`�?
-- 设定代码：它里面直接一次调用网络用应结果：`api/app/tasks/fetch_fx.py`，用错误扶起�?
-- �h�E参数�?  - `DATABASE_URL`：UostgreSQL 连接�?  - `FX_BASE`：[SD 默认�?  - `FX_TIMEOUT_MS` �?`FX_TIMEOUT_SECONDS`�?
-- 手势执行�?`cd api && python -m app.tasks.fetch_fx`
-- 定时程序管理�?  - Linux cron 例如：c0 9 * * * cd /path/to/Flow-Ledger/api && DATABASE_URL=... python -m app.tasks.fetch_fx >> /var/log/fx-sync.log 2>&1`  - Windows Task Scheduler 例如：sn Program/Script �?`python`，srguments 注册 `-m app.tasks.fetch_fx`，以 `api` 为所加送触发量�?
+## 10. 手动拉取汇率（sawazahmed0/exchange-api）
+- 模型：按“当前资产中的货币”作为 base，拉取 base→CNY 汇率，入库到最新 `rate_date`/`rate`，供资产展示使用。
+- 触发方式：前端页面手动调用 `POST /v1/exchange-rates/sync`，可选 `target`（默认 CNY）。
+- 设定代码：`api/app/tasks/fetch_fx.py` 负责拉取与入库。
+- 手动执行：`cd api && python -m app.tasks.fetch_fx`

@@ -22,7 +22,7 @@ from ..schemas.exchange_rate_import import (
     ImportExchangeRateResult,
 )
 from ..schemas.import_task import ImportTaskCreateResponse, ImportTaskStatus
-from ..tasks.fetch_fx import sync_exchange_rates
+from ..tasks.fetch_fx import sync_exchange_rates_for_assets
 
 
 router = APIRouter(prefix="/v1", tags=["currency"])
@@ -227,11 +227,14 @@ def get_exchange_rates(
         return {"base": base, "date": qdate.isoformat(), "rates": rates}
 
 
-# Trigger an on-demand FX sync from fawazahmed0/exchange-api using the configured base.
+# Trigger an on-demand FX sync for asset currencies to a target (default CNY).
 @router.post("/exchange-rates/sync")
-def sync_exchange_rates_now(db: Session = Depends(get_db)):
+def sync_exchange_rates_now(
+    target: str = Query("CNY", min_length=3, max_length=3),
+    db: Session = Depends(get_db),
+):
     try:
-        return sync_exchange_rates(db)
+        return sync_exchange_rates_for_assets(db, target=target)
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
 

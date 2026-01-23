@@ -319,7 +319,12 @@ paths:
   /exchange-rates/sync:
     post:
       tags: [exchange-rate]
-      summary: Trigger FX sync now
+      summary: Sync asset FX rates to target currency
+      parameters:
+        - in: query
+          name: target
+          required: false
+          schema: { type: string, pattern: '^[A-Z]{3}$', default: CNY }
       responses:
         '200':
           description: Sync triggered
