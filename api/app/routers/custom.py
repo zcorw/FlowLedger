@@ -51,6 +51,10 @@ class InstitutionAssetChangeOut(BaseModel):
     total: int
     data: List[InstitutionAssetChange]
 
+class LatestAumontTotalOut(BaseModel):
+    currency: str
+    datetime: datetime
+    total: Decimal
 
 @router.get("/institutions/assets/changes", response_model=InstitutionAssetChangeOut)
 def list_institution_asset_changes(
@@ -158,3 +162,62 @@ def list_institution_asset_changes(
         total=len(data),
         data=data,
     ).model_dump()
+
+@router.get("/total/assets/latest", response_model=LatestAumontTotalOut)
+def get_latest_total_amount(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    pref = db.query(UserPreference).filter(UserPreference.user_id == current_user.id).first()
+    if not pref:
+        raise HTTPException(status_code=404, detail="user_pref_not_found")
+    base_currency = pref.base_currency
+
+    sql = text(
+        """
+        WITH balance_fx AS (
+          SELECT
+            i.id AS institution_id,
+            i.name AS institution_name,
+            fp.amount_updated_at::date AS as_of,
+            fp.amount,
+            fp.currency,
+        """
+        + get_exchange_rate_by_as_of(
+            code=":target_code",
+            as_of="fp",
+            column="fx_rate",
+            currency="fp",
+            as_of_column="amount_updated_at",
+        )
+        + """
+          FROM deposit.financial_products fp
+          JOIN deposit.institutions i ON i.id = fp.institution_id
+          WHERE i.user_id = :user_id
+            AND fp.status = 'active'
+        )
+        SELECT
+          as_of,
+          SUM(amount * fx_rate) AS total_amount
+        FROM balance_fx
+        WHERE fx_rate IS NOT NULL
+        GROUP BY balance_fx.as_of
+        ORDER BY balance_fx.as_of DESC
+        LIMIT 1
+        """
+    )
+    rows = list(db.execute(
+        sql,
+        {
+            "user_id": current_user.id,
+            "target_code": base_currency,
+        },
+    ).mappings())
+    row = rows[0] if rows else None
+    return LatestAumontTotalOut(
+        currency=base_currency,
+        datetime=row["as_of"],
+        total=row["total_amount"],
+    ).model_dump()
+    
+    
