@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -50,6 +50,17 @@ class InstitutionAssetChangeOut(BaseModel):
     currency: str
     total: int
     data: List[InstitutionAssetChange]
+
+
+class MonthlyAssetPoint(BaseModel):
+    month: date
+    amount: Decimal
+
+
+class MonthlyAssetTrend(BaseModel):
+    currency: str
+    data: List[MonthlyAssetPoint]
+
 
 class LatestAumontTotalOut(BaseModel):
     currency: str
@@ -162,6 +173,81 @@ def list_institution_asset_changes(
         total=len(data),
         data=data,
     ).model_dump()
+
+
+@router.get("/assets/monthly", response_model=MonthlyAssetTrend)
+def get_monthly_assets(
+    from_dt: Optional[datetime] = Query(None, alias="from"),
+    to_dt: Optional[datetime] = Query(None, alias="to"),
+    limit: Optional[int] = Query(None,ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    pref = db.query(UserPreference).filter(UserPreference.user_id == current_user.id).first()
+    if not pref:
+        raise HTTPException(status_code=404, detail="user_pref_not_found")
+    base_currency = pref.base_currency
+
+    sql = text(
+        """
+        WITH monthly_last AS (
+          SELECT
+            pb.product_id,
+            fp.currency,
+            date_trunc('month', pb.as_of)::date AS month_start,
+            pb.as_of,
+            pb.amount,
+            row_number() OVER (
+              PARTITION BY pb.product_id, date_trunc('month', pb.as_of)
+              ORDER BY pb.as_of DESC
+            ) AS rn
+          FROM deposit.product_balances pb
+          JOIN deposit.financial_products fp ON fp.id = pb.product_id
+          JOIN deposit.institutions i ON i.id = fp.institution_id
+          WHERE i.user_id = :user_id
+            AND (:from_dt IS NULL OR pb.as_of >= :from_dt)
+            AND (:to_dt IS NULL OR pb.as_of <= :to_dt)
+            AND fp.status != 'closed'
+        )
+        SELECT
+          m.month_start AS month,
+          SUM(m.amount * fx.fx_rate) AS total_amount
+        FROM monthly_last m
+        LEFT JOIN LATERAL (
+          SELECT
+        """
+        + get_exchange_rate_by_as_of(
+            code=":target_code",
+            as_of="m",
+            column="fx_rate",
+            currency="m",
+        )
+        + """
+        ) fx ON true
+        WHERE m.rn = 1
+          AND fx.fx_rate IS NOT NULL
+        GROUP BY m.month_start
+        ORDER BY m.month_start DESC
+        LIMIT :limit
+        """
+    )
+    rows = db.execute(
+        sql,
+        {
+            "user_id": current_user.id,
+            "from_dt": from_dt,
+            "to_dt": to_dt,
+            "target_code": base_currency,
+            "limit": limit,
+        },
+    ).mappings()
+
+    data = [
+        MonthlyAssetPoint(month=row["month"], amount=row["total_amount"])
+        for row in rows
+    ]
+    return MonthlyAssetTrend(currency=base_currency, data=data).model_dump()
+
 
 @router.get("/total/assets/latest", response_model=LatestAumontTotalOut)
 def get_latest_total_amount(
