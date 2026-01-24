@@ -51,27 +51,3 @@ WHERE source_ref IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_expenses__user_occurred_at_desc
 ON expense.expenses (user_id, occurred_at DESC);
 
--- Seeds (tie to first available user if any)
-WITH u AS (
-  SELECT id FROM "user".users ORDER BY id LIMIT 1
-),
-cat AS (
-  INSERT INTO expense.expense_categories(user_id, name)
-  SELECT u.id, '???' FROM u
-  ON CONFLICT DO NOTHING
-  RETURNING id, user_id
-),
-cat_selected AS (
-  SELECT id, user_id FROM cat
-  UNION ALL
-  SELECT c.id, c.user_id
-  FROM expense.expense_categories c
-  JOIN u ON c.user_id = u.id
-  WHERE c.name = '???'
-  LIMIT 1
-)
-INSERT INTO expense.expenses(user_id, amount, currency, category_id, merchant, occurred_at, note)
-SELECT u.id, 11.990000, 'USD', c.id, 'YouTube', now(), '??????'
-FROM u
-JOIN cat_selected c ON c.user_id = u.id
-LIMIT 1;
