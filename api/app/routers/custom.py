@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from ..auth import resolve_user_id
 from ..db import SessionLocal
 from ..models import User, UserPreference
-from app.db.shared_sql import get_exchange_rate_by_as_of
+from ..db_tools.shared_sql import get_exchange_rate_by_as_of
 
 router = APIRouter(prefix="/v1/custom", tags=["custom"])
 
