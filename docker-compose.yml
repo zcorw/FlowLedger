@@ -20,13 +20,15 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
-      - flow_net
+      - backend
 
   db-migrate:
     image: postgres:12-alpine
     depends_on:
       db:
         condition: service_healthy
+    env_file:
+      - .env
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-flow_ledger}
       POSTGRES_USER: ${POSTGRES_USER:-flow_ledger}
@@ -34,7 +36,7 @@ services:
     volumes:
       - ./:/work:ro
     working_dir: /work
-    entrypoint: ["/bin/sh", "-lc"]
+    entrypoint: ["/bin/sh","-lc"]
     command: >-
       'set -e;
        echo "Applying SQL schemas (deterministic order)...";
@@ -53,7 +55,7 @@ services:
        # Apply any remaining *.sql not covered above (extensions, views, etc.)
        for f in /work/sql/schema/*.sql; do \
          case "$$f" in \
-           */extensions.sql|*/currency.sql|*/user.sql|*/deposit.sql|*/expense.sql|*/loan.sql|*/scheduler.sql) continue;; \
+           */user.sql|*/currency.sql|*/deposit.sql|*/expense.sql|*/loan.sql|*/scheduler.sql) continue;; \
          esac; \
          apply "$$f"; \
        done; \
@@ -71,24 +73,29 @@ services:
        fi; \
        echo "Database migration job completed."'
     networks:
-      - flow_net
+      - backend
 
   api:
-    image: python:3.11-slim
-    container_name: flow-ledger-api
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     depends_on:
       db:
         condition: service_healthy
+    env_file:
+      - ./.env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-flow_ledger}:${POSTGRES_PASSWORD:-flow_ledger}@db:5432/${POSTGRES_DB:-flow_ledger}
-      # 根据实现选择 FastAPI/Flask；此处仅预留占位
+      # Prefer POSTGRES_* as the single source of truth; DATABASE_URL is optional.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-flow_ledger}:${POSTGRES_PASSWORD:-flow_ledger}@db:5432/${POSTGRES_DB:-flow_ledger}}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       UPLOAD_DIR: ${UPLOAD_DIR:-/data/uploads}
+    ports:
+      - "${API_PORT:-8000}:8000"
     volumes:
-      - ./:/app
-      - ${API_DATA_DIR:-./data/api}:/data
-    working_dir: /app
-    command: ["/bin/sh", "-lc", "echo 'API container is ready for development.' && tail -f /dev/null"]
+      - ./api:/app
+      - ${API_DATA_DIR:-./data}:/data
+    networks:
+      - backend
     stop_signal: SIGTERM
     stop_grace_period: 30s
     healthcheck:
@@ -96,56 +103,57 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 512M
-    networks:
-      - flow_net
+    cpus: "1.0"
+    mem_limit: 512M
 
   bot:
-    image: python:3.11-slim
-    container_name: flow-ledger-bot
+    build:
+      context: .
+      dockerfile: bot/Dockerfile
     depends_on:
-      db:
-        condition: service_healthy
       api:
         condition: service_started
+    env_file:
+      - .env
     environment:
-      BOT_TOKEN: ${BOT_TOKEN:-REPLACE_ME}
       API_BASE_URL: ${API_BASE_URL:-http://api:8000/v1}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-flow_ledger}:${POSTGRES_PASSWORD:-flow_ledger}@db:5432/${POSTGRES_DB:-flow_ledger}
-      DEFAULT_LANG: ${DEFAULT_LANG:-zh-CN}
-      DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-UTC}
-      DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-CNY}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-    volumes:
-      - ./:/app
-    working_dir: /app
-    command: ["/bin/sh", "-lc", "echo 'Bot container is ready for development.' && tail -f /dev/null"]
-    networks:
-      - flow_net
-
-  pgadmin:
-    image: dpage/pgadmin4:8
-    profiles: ["admin"]
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+      BOT_STATE_PATH: ${BOT_STATE_PATH:-/app/data/bot_state.json}
     ports:
-      - "${PGADMIN_PORT:-8081}:80"
+      - "${BOT_PORT:-9080}:7000"
+    restart: unless-stopped
+    volumes:
+      - ./bot:/app
+      - botdata:/app/data
     networks:
-      - flow_net
+      - backend
 
-networks:
-  flow_net:
-    driver: bridge
+  scheduler:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    depends_on:
+      api:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      API_BASE_URL: ${API_BASE_URL:-http://api:8000/v1}
+      FX_CRON_SCHEDULE: ${FX_CRON_SCHEDULE:-0 9 * * *}
+      FX_TIMEOUT_SECONDS: ${FX_TIMEOUT_SECONDS:-10}
+      FX_SYNC_ON_START: ${FX_SYNC_ON_START:-false}
+    command: python -m app.tasks.scheduler_service
+    volumes:
+      - ./api:/app
+    networks:
+      - backend
 
 volumes:
   pgdata:
     driver: local
+  botdata:
+    driver: local
 
+networks:
+  backend:
+    driver: bridge

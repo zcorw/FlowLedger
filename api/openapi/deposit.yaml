@@ -137,30 +137,28 @@ components:
     ImportInstitutionItem:
       type: object
       properties:
-        institution_key: { type: string, minLength: 1, maxLength: 64 }
         name: { type: string, minLength: 1, maxLength: 128 }
         type: { type: string, enum: [bank, broker, other] }
         status: { type: string, enum: [active, inactive, closed], nullable: true }
-      required: [institution_key, name, type]
+      required: [name, type]
     ImportProductItem:
       type: object
       properties:
-        product_key: { type: string, minLength: 1, maxLength: 64 }
-        institution_key: { type: string, minLength: 1, maxLength: 64 }
+        institution_name: { type: string, minLength: 1, maxLength: 128 }
         name: { type: string, minLength: 1, maxLength: 128 }
         product_type: { type: string, enum: [deposit, investment, securities, other], default: deposit }
         currency: { type: string, pattern: '^[A-Z]{3}$' }
         status: { type: string, enum: [active, inactive, closed], default: active }
         risk_level: { type: string, enum: [flexible, stable, high_risk], default: stable }
-        amount: { type: string, pattern: '^\d+(\.\d{1,6})?$', nullable: true }
-      required: [product_key, institution_key, name, currency]
+      required: [institution_name, name, currency]
     ImportBalanceItem:
       type: object
       properties:
-        product_key: { type: string, minLength: 1, maxLength: 64 }
+        institution_name: { type: string, minLength: 1, maxLength: 128 }
+        product_name: { type: string, minLength: 1, maxLength: 128 }
         as_of: { type: string, format: date-time }
         amount: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
-      required: [product_key, as_of, amount]
+      required: [institution_name, product_name, as_of, amount]
     ImportDepositRequest:
       type: object
       properties:
@@ -201,28 +199,29 @@ components:
     ImportInstitutionResult:
       type: object
       properties:
-        institution_key: { type: string }
+        institution_name: { type: string }
         institution_id: { type: integer, format: int64, nullable: true }
         status: { type: string, enum: [created, exists, failed] }
         error: { type: string, nullable: true }
-      required: [institution_key, status]
+      required: [institution_name, status]
     ImportProductResult:
       type: object
       properties:
-        product_key: { type: string }
-        institution_key: { type: string }
+        institution_name: { type: string }
+        product_name: { type: string }
         product_id: { type: integer, format: int64, nullable: true }
         status: { type: string, enum: [created, exists, failed] }
         error: { type: string, nullable: true }
-      required: [product_key, institution_key, status]
+      required: [institution_name, product_name, status]
     ImportBalanceResult:
       type: object
       properties:
-        product_key: { type: string }
+        institution_name: { type: string }
+        product_name: { type: string }
         as_of: { type: string, format: date-time }
         status: { type: string, enum: [created, exists, failed] }
         error: { type: string, nullable: true }
-      required: [product_key, as_of, status]
+      required: [institution_name, product_name, as_of, status]
     ImportSectionResult:
       type: object
       properties:

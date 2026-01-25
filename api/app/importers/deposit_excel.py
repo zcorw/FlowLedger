@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from typing import Any, Dict, List, Optional
@@ -37,12 +37,37 @@ def _normalize_decimal(value: Any) -> Optional[Decimal]:
         return None
 
 
-def _normalize_datetime(value: Any) -> Any:
+def _normalize_datetime(value: Any) -> Optional[datetime]:
     if isinstance(value, datetime):
         return value
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day)
     if value is None or value == "":
         return None
-    return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _normalize_enum(value: Any) -> Optional[str]:
+    text = _normalize_str(value)
+    return text.lower() if text else None
+
+
+def _normalize_currency(value: Any) -> Optional[str]:
+    text = _normalize_str(value)
+    return text.upper() if text else None
+
+
+def _sanitize_sheet_name(name: str) -> str:
+    invalid = {":", "\\", "/", "?", "*", "[", "]"}
+    cleaned = "".join(ch for ch in name if ch not in invalid).strip()
+    if not cleaned:
+        cleaned = "Sheet"
+    return cleaned[:31]
 
 
 def _read_sheet_rows(ws, headers: List[str]) -> List[Dict[str, Any]]:
@@ -74,43 +99,27 @@ def _parse_deposit_import_content(filename: str, content: bytes) -> ImportDeposi
     except Exception as exc:
         raise HTTPException(status_code=422, detail="invalid_excel") from exc
 
-    if "institutions" not in wb.sheetnames:
-        raise HTTPException(status_code=422, detail="missing_sheet:institutions")
-    if "products" not in wb.sheetnames:
-        raise HTTPException(status_code=422, detail="missing_sheet:products")
-    if "product_balances" not in wb.sheetnames:
-        raise HTTPException(status_code=422, detail="missing_sheet:product_balances")
+    if "Institutions" not in wb.sheetnames:
+        raise HTTPException(status_code=422, detail="missing_sheet:Institutions")
+    if "Products" not in wb.sheetnames:
+        raise HTTPException(status_code=422, detail="missing_sheet:Products")
 
     inst_rows = _read_sheet_rows(
-        wb["institutions"],
-        ["institution_key", "name", "type", "status"],
+        wb["Institutions"],
+        ["Name", "Type", "Status"],
     )
     prod_rows = _read_sheet_rows(
-        wb["products"],
-        [
-            "product_key",
-            "institution_key",
-            "name",
-            "product_type",
-            "currency",
-            "status",
-            "risk_level",
-            "amount",
-        ],
-    )
-    bal_rows = _read_sheet_rows(
-        wb["product_balances"],
-        ["product_key", "as_of", "amount"],
+        wb["Products"],
+        ["Name", "Institution", "Type", "Status", "Currency", "Risk Level"],
     )
 
     institutions: List[ImportInstitutionItem] = []
     for row in inst_rows:
         institutions.append(
             ImportInstitutionItem(
-                institution_key=_normalize_str(row["institution_key"]),
-                name=_normalize_str(row["name"]),
-                type=_normalize_str(row["type"]),
-                status=_normalize_str(row["status"]),
+                name=_normalize_str(row["Name"]),
+                type=_normalize_enum(row["Type"]),
+                status=_normalize_enum(row["Status"]),
             )
         )
 
@@ -118,26 +127,54 @@ def _parse_deposit_import_content(filename: str, content: bytes) -> ImportDeposi
     for row in prod_rows:
         products.append(
             ImportProductItem(
-                product_key=_normalize_str(row["product_key"]),
-                institution_key=_normalize_str(row["institution_key"]),
-                name=_normalize_str(row["name"]),
-                product_type=_normalize_str(row["product_type"]) or "deposit",
-                currency=_normalize_str(row["currency"]),
-                status=_normalize_str(row["status"]) or "active",
-                risk_level=_normalize_str(row["risk_level"]) or "stable",
-                amount=_normalize_decimal(row["amount"]),
+                institution_name=_normalize_str(row["Institution"]),
+                name=_normalize_str(row["Name"]),
+                product_type=_normalize_enum(row["Type"]) or "deposit",
+                currency=_normalize_currency(row["Currency"]),
+                status=_normalize_enum(row["Status"]) or "active",
+                risk_level=_normalize_enum(row["Risk Level"]) or "stable",
             )
         )
 
     balances: List[ImportBalanceItem] = []
-    for row in bal_rows:
-        balances.append(
-            ImportBalanceItem(
-                product_key=_normalize_str(row["product_key"]),
-                as_of=_normalize_datetime(row["as_of"]),
-                amount=_normalize_decimal(row["amount"]),
-            )
-        )
+    institution_names = [item.name for item in institutions]
+    for inst_name in institution_names:
+        sheet_name = inst_name
+        if sheet_name not in wb.sheetnames:
+            sheet_name = _sanitize_sheet_name(inst_name)
+        if sheet_name not in wb.sheetnames:
+            raise HTTPException(status_code=422, detail=f"missing_sheet:{inst_name}")
+
+        ws = wb[sheet_name]
+        header_row = [cell.value for cell in ws[1]]
+        if not header_row or str(header_row[0]).strip().lower() != "date":
+            raise HTTPException(status_code=422, detail=f"invalid_balance_header:{inst_name}")
+        product_headers = []
+        for cell in header_row[1:]:
+            name = _normalize_str(cell)
+            product_headers.append(name)
+
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row or (row[0] is None and all(cell is None for cell in row[1:])):
+                continue
+            as_of = _normalize_datetime(row[0])
+            if not as_of:
+                continue
+            for idx, amount in enumerate(row[1:], start=0):
+                product_name = product_headers[idx] if idx < len(product_headers) else None
+                if not product_name:
+                    continue
+                value = _normalize_decimal(amount)
+                if value is None:
+                    continue
+                balances.append(
+                    ImportBalanceItem(
+                        institution_name=inst_name,
+                        product_name=product_name,
+                        as_of=as_of,
+                        amount=value,
+                    )
+                )
 
     try:
         return ImportDepositRequest(

@@ -2,7 +2,7 @@
 范围：
 - 语言 Python，框架 FastAPI
 - 新增 /healthz 返回 {"ok": true}
-- infra/docker-compose.yml：postgres + api 服务；api 读取 .env
+- docker-compose.yml：postgres + api 服务；api 读取 .env
 - Alembic 初始化（先不建表）
 - tests/test_healthz.py 覆盖 200/响应
 - CI：格式/静态检查 + 单测

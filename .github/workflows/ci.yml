@@ -35,9 +35,8 @@ jobs:
             git reset --hard origin/main
 
             echo "== Docker compose up =="
-            cd infra
-            docker compose --env-file ../.env pull || true
-            docker compose --env-file ../.env up -d --build
+            docker compose --env-file .env pull || true
+            docker compose --env-file .env up -d --build
 
             echo "== Optional: remove dangling images =="
             docker image prune -f

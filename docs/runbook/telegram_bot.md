@@ -22,7 +22,7 @@
 - `.env` 填好 `BOT_TOKEN`，本地联调推荐 `API_BASE_URL=http://api:8000/v1`。
 - 构建并启动 bot：
   ```bash
-  cd infra
+  cd .
   docker compose up -d --build bot
   docker compose logs -f bot
   ```

@@ -986,7 +986,7 @@ def delete_balance(
     return BalanceOut.model_validate(bal, from_attributes=True).model_dump()
 
 
-def _ensure_unique_keys(items: List[BaseModel], key_name: str) -> None:
+def _ensure_unique_values(items: List[BaseModel], key_name: str, error_key: str) -> None:
     seen: set[str] = set()
     duplicates: set[str] = set()
     for item in items:
@@ -997,7 +997,21 @@ def _ensure_unique_keys(items: List[BaseModel], key_name: str) -> None:
             seen.add(key)
     if duplicates:
         dup_list = ",".join(sorted(duplicates))
-        raise HTTPException(status_code=422, detail=f"duplicate_{key_name}:{dup_list}")
+        raise HTTPException(status_code=422, detail=f"duplicate_{error_key}:{dup_list}")
+
+
+def _ensure_unique_product_names(items: List[BaseModel]) -> None:
+    seen: set[tuple[str, str]] = set()
+    duplicates: set[str] = set()
+    for item in items:
+        key = (item.institution_name, item.name)
+        if key in seen:
+            duplicates.add(f"{item.institution_name}:{item.name}")
+        else:
+            seen.add(key)
+    if duplicates:
+        dup_list = ",".join(sorted(duplicates))
+        raise HTTPException(status_code=422, detail=f"duplicate_product:{dup_list}")
 
 
 def _import_deposit_payload(
@@ -1005,28 +1019,41 @@ def _import_deposit_payload(
     db: Session,
     current_user: User,
 ) -> ImportDepositResponse:
-    _ensure_unique_keys(payload.institutions, "institution_key")
-    _ensure_unique_keys(payload.products, "product_key")
+    _ensure_unique_values(payload.institutions, "name", "institution_name")
+    _ensure_unique_product_names(payload.products)
 
-    inst_keys = {item.institution_key for item in payload.institutions}
+    inst_names = {item.name for item in payload.institutions}
     missing_inst = {
-        item.institution_key for item in payload.products if item.institution_key not in inst_keys
+        item.institution_name for item in payload.products if item.institution_name not in inst_names
     }
     if missing_inst:
         missing_list = ",".join(sorted(missing_inst))
-        raise HTTPException(status_code=422, detail=f"missing_institution_key:{missing_list}")
+        raise HTTPException(status_code=422, detail=f"missing_institution_name:{missing_list}")
 
-    prod_keys = {item.product_key for item in payload.products}
-    missing_prod = {item.product_key for item in payload.product_balances if item.product_key not in prod_keys}
+    prod_keys = {(item.institution_name, item.name) for item in payload.products}
+    missing_prod = {
+        f"{item.institution_name}:{item.product_name}"
+        for item in payload.product_balances
+        if (item.institution_name, item.product_name) not in prod_keys
+    }
     if missing_prod:
         missing_list = ",".join(sorted(missing_prod))
-        raise HTTPException(status_code=422, detail=f"missing_product_key:{missing_list}")
+        raise HTTPException(status_code=422, detail=f"missing_product_name:{missing_list}")
 
     inst_results: List[ImportInstitutionResult] = []
     prod_results: List[ImportProductResult] = []
     bal_results: List[ImportBalanceResult] = []
     inst_map: dict[str, int] = {}
-    prod_map: dict[str, int] = {}
+    prod_map: dict[tuple[int, str], int] = {}
+    latest_amounts: dict[tuple[str, str], Decimal] = {}
+    latest_as_of: dict[tuple[str, str], datetime] = {}
+
+    for item in payload.product_balances:
+        key = (item.institution_name, item.product_name)
+        last_dt = latest_as_of.get(key)
+        if last_dt is None or item.as_of > last_dt:
+            latest_as_of[key] = item.as_of
+            latest_amounts[key] = item.amount
 
     for item in payload.institutions:
         existing = (
@@ -1035,10 +1062,10 @@ def _import_deposit_payload(
             .first()
         )
         if existing:
-            inst_map[item.institution_key] = existing.id
+            inst_map[item.name] = existing.id
             inst_results.append(
                 ImportInstitutionResult(
-                    institution_key=item.institution_key,
+                    institution_name=item.name,
                     institution_id=existing.id,
                     status="exists",
                 )
@@ -1062,31 +1089,31 @@ def _import_deposit_payload(
             db.rollback()
             inst_results.append(
                 ImportInstitutionResult(
-                    institution_key=item.institution_key,
+                    institution_name=item.name,
                     status="failed",
                     error="institution_create_failed",
                 )
             )
             continue
 
-        inst_map[item.institution_key] = inst.id
+        inst_map[item.name] = inst.id
         inst_results.append(
             ImportInstitutionResult(
-                institution_key=item.institution_key,
+                institution_name=item.name,
                 institution_id=inst.id,
                 status="created",
             )
         )
 
     for item in payload.products:
-        inst_id = inst_map.get(item.institution_key)
+        inst_id = inst_map.get(item.institution_name)
         if not inst_id:
             prod_results.append(
                 ImportProductResult(
-                    product_key=item.product_key,
-                    institution_key=item.institution_key,
+                    institution_name=item.institution_name,
+                    product_name=item.name,
                     status="failed",
-                    error="institution_key_not_found",
+                    error="institution_name_not_found",
                 )
             )
             continue
@@ -1096,15 +1123,33 @@ def _import_deposit_payload(
         except HTTPException:
             prod_results.append(
                 ImportProductResult(
-                    product_key=item.product_key,
-                    institution_key=item.institution_key,
+                    institution_name=item.institution_name,
+                    product_name=item.name,
                     status="failed",
                     error="invalid_currency",
                 )
             )
             continue
 
+        existing = (
+            db.query(FinancialProduct)
+            .filter(FinancialProduct.institution_id == inst_id, FinancialProduct.name == item.name)
+            .first()
+        )
+        if existing:
+            prod_map[(inst_id, existing.name)] = existing.id
+            prod_results.append(
+                ImportProductResult(
+                    institution_name=item.institution_name,
+                    product_name=item.name,
+                    product_id=existing.id,
+                    status="exists",
+                )
+            )
+            continue
+
         now = _now()
+        amount = latest_amounts.get((item.institution_name, item.name), Decimal("0"))
         prod = FinancialProduct(
             institution_id=inst_id,
             name=item.name,
@@ -1112,7 +1157,7 @@ def _import_deposit_payload(
             currency=currency,
             status=item.status,
             risk_level=item.risk_level,
-            amount=item.amount or Decimal("0"),
+            amount=amount,
             amount_updated_at=now,
             created_at=now,
             updated_at=now,
@@ -1125,33 +1170,46 @@ def _import_deposit_payload(
             db.rollback()
             prod_results.append(
                 ImportProductResult(
-                    product_key=item.product_key,
-                    institution_key=item.institution_key,
+                    institution_name=item.institution_name,
+                    product_name=item.name,
                     status="failed",
                     error="product_create_failed",
                 )
             )
             continue
 
-        prod_map[item.product_key] = prod.id
+        prod_map[(inst_id, item.name)] = prod.id
         prod_results.append(
             ImportProductResult(
-                product_key=item.product_key,
-                institution_key=item.institution_key,
+                institution_name=item.institution_name,
+                product_name=item.name,
                 product_id=prod.id,
                 status="created",
             )
         )
 
     for item in payload.product_balances:
-        prod_id = prod_map.get(item.product_key)
+        inst_id = inst_map.get(item.institution_name)
+        if not inst_id:
+            bal_results.append(
+                ImportBalanceResult(
+                    institution_name=item.institution_name,
+                    product_name=item.product_name,
+                    as_of=item.as_of,
+                    status="failed",
+                    error="institution_name_not_found",
+                )
+            )
+            continue
+        prod_id = prod_map.get((inst_id, item.product_name))
         if not prod_id:
             bal_results.append(
                 ImportBalanceResult(
-                    product_key=item.product_key,
+                    institution_name=item.institution_name,
+                    product_name=item.product_name,
                     as_of=item.as_of,
                     status="failed",
-                    error="product_key_not_found",
+                    error="product_name_not_found",
                 )
             )
             continue
@@ -1164,7 +1222,8 @@ def _import_deposit_payload(
         if existing:
             bal_results.append(
                 ImportBalanceResult(
-                    product_key=item.product_key,
+                    institution_name=item.institution_name,
+                    product_name=item.product_name,
                     as_of=item.as_of,
                     status="exists",
                 )
@@ -1187,7 +1246,8 @@ def _import_deposit_payload(
             db.rollback()
             bal_results.append(
                 ImportBalanceResult(
-                    product_key=item.product_key,
+                    institution_name=item.institution_name,
+                    product_name=item.product_name,
                     as_of=item.as_of,
                     status="failed",
                     error="balance_create_failed",
@@ -1197,7 +1257,8 @@ def _import_deposit_payload(
 
         bal_results.append(
             ImportBalanceResult(
-                product_key=item.product_key,
+                institution_name=item.institution_name,
+                product_name=item.product_name,
                 as_of=item.as_of,
                 status="created",
             )
