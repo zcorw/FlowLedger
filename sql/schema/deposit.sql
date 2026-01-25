@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS deposit.financial_products (
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT ck_fin_products__type CHECK (product_type IN ('deposit','investment','securities','other')),
   CONSTRAINT ck_fin_products__status CHECK (status IN ('active','inactive','closed')),
-  CONSTRAINT ck_fin_products__risk CHECK (risk_level IN ('flexible','stable','high_risk'))
+  CONSTRAINT ck_fin_products__risk CHECK (risk_level IN ('flexible','stable','high_risk')),
+  CONSTRAINT up_fin_products__inst_product UNIQUE (institution_id, name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_fin_products__institution_id

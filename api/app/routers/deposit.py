@@ -2,18 +2,27 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from io import BytesIO
 from typing import List, Optional
 
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, validator
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from ..auth import resolve_user_id
 from ..db import SessionLocal
+from ..exporters.deposit_excel import (
+    ExportExcelData,
+    InstitutionExcelData,
+    ProductBalanceExcelData,
+    ProductExcelData,
+    export_to_excel,
+)
 from ..import_tasks import create_task, get_task, save_upload_file, update_task
 from ..importers.deposit_excel import parse_deposit_import_path
 from ..models import Currency, FinancialProduct, Institution, ProductBalance, User
@@ -104,6 +113,75 @@ def _ensure_currency(code: str, db: Session) -> str:
     if not db.get(Currency, code):
         raise HTTPException(status_code=422, detail="unknown_currency")
     return code
+
+
+def _build_export_excel_data(db: Session, current_user: User) -> ExportExcelData:
+    institutions = (
+        db.query(Institution)
+        .filter(Institution.user_id == current_user.id, Institution.status != "closed")
+        .order_by(Institution.id.asc())
+        .all()
+    )
+    if not institutions:
+        return ExportExcelData(institutions=[])
+
+    inst_ids = [inst.id for inst in institutions]
+    products = (
+        db.query(FinancialProduct)
+        .filter(FinancialProduct.institution_id.in_(inst_ids), FinancialProduct.status != "closed")
+        .order_by(FinancialProduct.id.asc())
+        .all()
+    )
+    product_map = {prod.id: prod for prod in products}
+    products_by_inst: dict[int, List[ProductExcelData]] = {inst_id: [] for inst_id in inst_ids}
+    for prod in products:
+        products_by_inst[prod.institution_id].append(
+            ProductExcelData(
+                id=prod.id,
+                name=prod.name,
+                product_type=prod.product_type,
+                currency=prod.currency,
+                status=prod.status,
+                risk_level=prod.risk_level,
+            )
+        )
+
+    balances = (
+        db.query(ProductBalance)
+        .join(FinancialProduct, ProductBalance.product_id == FinancialProduct.id)
+        .filter(FinancialProduct.institution_id.in_(inst_ids))
+        .order_by(ProductBalance.as_of.asc())
+        .all()
+    )
+    balances_by_inst: dict[int, List[ProductBalanceExcelData]] = {
+        inst_id: [] for inst_id in inst_ids
+    }
+    for bal in balances:
+        prod = product_map.get(bal.product_id)
+        if not prod:
+            continue
+        balances_by_inst[prod.institution_id].append(
+            ProductBalanceExcelData(
+                product_id=bal.product_id,
+                as_of=bal.as_of,
+                balance=bal.amount,
+            )
+        )
+
+    export_insts: List[InstitutionExcelData] = []
+    for inst in institutions:
+        export_insts.append(
+            InstitutionExcelData(
+                id=inst.id,
+                name=inst.name,
+                type=inst.type,
+                status=inst.status,
+                products=products_by_inst.get(inst.id, []),
+                balances=balances_by_inst.get(inst.id, []),
+            )
+        )
+
+    return ExportExcelData(institutions=export_insts)
 
 
 def _require_delete_confirm(req: Request, hard: bool) -> None:
@@ -1180,3 +1258,32 @@ def get_deposit_import_task(task_id: str, current_user: User = Depends(get_curre
     if task.get("owner_id") != current_user.id:
         raise HTTPException(status_code=404, detail="task_not_found")
     return _public_task(task)
+
+
+@router.get(
+    "/export/deposit",
+    summary="Export deposit data",
+    description="Export institutions, products, and balances as an Excel file.",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "content": {
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}
+            },
+            "description": "Excel file containing deposit backup data.",
+        }
+    },
+)
+def export_deposit_data(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    payload = _build_export_excel_data(db, current_user)
+    content = export_to_excel(payload)
+    filename = f"deposit_export_{current_user.id}_{_now().strftime('%Y%m%d%H%M%S')}.xlsx"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )

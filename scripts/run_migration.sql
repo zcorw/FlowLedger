@@ -5,9 +5,9 @@ ALTER TABLE "deposit".institutions
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'ck_institutions__status'
+        SELECT 1 FROM pg_constraint WHERE conname = 'up_fin_products__inst_product'
     ) THEN
-        ALTER TABLE "deposit".institutions ADD CONSTRAINT ck_institutions__status CHECK (status IN ('active','inactive','closed'));
+        ALTER TABLE "deposit".financial_products ADD CONSTRAINT up_fin_products__inst_product UNIQUE (institution_id, name);
     END IF;
 END;
 $$;
