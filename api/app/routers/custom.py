@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Optional
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -66,6 +67,16 @@ class LatestAumontTotalOut(BaseModel):
     currency: str
     datetime: datetime
     total: Decimal
+    
+class AssetCurrencyPoint(BaseModel):
+    amount: Decimal
+    change: Decimal
+    rate: Decimal
+    currency: str
+    
+class AssetCurrencyTotalOut(BaseModel):
+    data: List[AssetCurrencyPoint]
+    
 
 @router.get("/institutions/assets/changes", response_model=InstitutionAssetChangeOut)
 def list_institution_asset_changes(
@@ -325,4 +336,73 @@ def get_latest_total_amount(
         total=row["total_amount"],
     ).model_dump()
     
+@router.get("/total/assets/currency", response_model=AssetCurrencyTotalOut)
+def get_total_assets_by_currency(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    pref = db.query(UserPreference).filter(UserPreference.user_id == current_user.id).first()
+    if not pref:
+        raise HTTPException(status_code=404, detail="user_pref_not_found")
+    base_currency = pref.base_currency
+
+    sql = text(
+        """
+        WITH balance_fx AS (
+          SELECT
+            fp.id,
+            fp.currency,
+            pb.as_of,
+            pb.amount,
+            DENSE_RANK() OVER (ORDER BY pb.as_of DESC) AS rnk,
+        """
+        + get_exchange_rate_by_as_of(
+            code=":target_code",
+            as_of="fp",
+            column="fx_rate",
+            currency="fp",
+            as_of_column="amount_updated_at",
+        )
+        + """
+          FROM deposit.product_balances pb
+          JOIN deposit.financial_products fp ON fp.id = pb.product_id
+          JOIN deposit.institutions i ON i.id = fp.institution_id
+          WHERE i.user_id = :user_id
+            AND fp.status != 'closed'
+        )
+        SELECT
+          SUM(amount * fx_rate) AS total,
+          as_of,
+          currency
+        FROM balance_fx
+        WHERE fx_rate IS NOT NULL
+          AND rnk <= 2
+        GROUP BY as_of, currency
+        ORDER BY as_of DESC
+        """
+    )
+    rows = list(db.execute(
+        sql,
+        {
+            "user_id": current_user.id,
+            "target_code": base_currency,
+        },
+    ).mappings())
+    print(rows)
+    results: List[AssetCurrencyPoint] = [] 
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[row["currency"]].append(row)
+    for currency, rows in grouped.items():
+        change = rows[0]["total"] - rows[1]["total"] if len(rows) > 1 else 0
+        rate = change / rows[0]["total"] if len(rows) > 1 else 1
+        results.append(AssetCurrencyPoint(
+            currency=currency,
+            amount=rows[0]["total"],
+            change=change,
+            rate=rate,
+        ))
+    return AssetCurrencyTotalOut(
+        data=results
+    ).model_dump()
     
