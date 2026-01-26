@@ -154,6 +154,19 @@ class ExchangeRateOut(BaseModel):
     effective_date: Optional[str] = None
 
 
+class ExchangeRateRangeItem(BaseModel):
+    date: str
+    rate: Decimal
+
+
+class ExchangeRateRangeOut(BaseModel):
+    base: str
+    quote: str
+    from_date: str
+    to_date: str
+    items: List[ExchangeRateRangeItem]
+
+
 # Fetch the latest exchange rate(s) for a base currency, optionally for a specific quote.
 @router.get("/exchange-rates")
 def get_exchange_rates(
@@ -225,6 +238,51 @@ def get_exchange_rates(
         if not rates:
             raise HTTPException(status_code=404, detail="rate_not_found")
         return {"base": base, "date": qdate.isoformat(), "rates": rates}
+
+
+@router.get("/exchange-rates/range", response_model=ExchangeRateRangeOut)
+def get_exchange_rates_range(
+    base: str = Query(..., min_length=3, max_length=3),
+    quote: str = Query(..., min_length=3, max_length=3),
+    from_dt: str = Query(..., alias="from"),
+    to_dt: str = Query(..., alias="to"),
+    db: Session = Depends(get_db),
+):
+    base = base.upper()
+    quote = quote.upper()
+    start = date_cls.fromisoformat(from_dt)
+    end = date_cls.fromisoformat(to_dt)
+    if start > end:
+        raise HTTPException(status_code=422, detail="invalid_date_range")
+
+    rows = (
+        db.query(ExchangeRate)
+        .filter(
+            ExchangeRate.base_code == base,
+            ExchangeRate.quote_code == quote,
+            ExchangeRate.rate_date >= start,
+            ExchangeRate.rate_date <= end,
+        )
+        .order_by(ExchangeRate.rate_date.asc())
+        .all()
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="rate_not_found")
+
+    items = [
+        ExchangeRateRangeItem(
+            date=row.rate_date.isoformat(),
+            rate=Decimal(row.rate),
+        )
+        for row in rows
+    ]
+    return ExchangeRateRangeOut(
+        base=base,
+        quote=quote,
+        from_date=start.isoformat(),
+        to_date=end.isoformat(),
+        items=items,
+    ).model_dump()
 
 
 # Trigger an on-demand FX sync for asset currencies to a target (default CNY).

@@ -111,6 +111,23 @@ components:
           rate: { type: string }
           effective_date: { type: string, format: date }
         required: [rate, effective_date]
+    ExchangeRateRangeItem:
+      type: object
+      properties:
+        date: { type: string, format: date }
+        rate: { type: string }
+      required: [date, rate]
+    ExchangeRateRange:
+      type: object
+      properties:
+        base: { type: string, pattern: '^[A-Z]{3}$' }
+        quote: { type: string, pattern: '^[A-Z]{3}$' }
+        from_date: { type: string, format: date }
+        to_date: { type: string, format: date }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ExchangeRateRangeItem' }
+      required: [base, quote, from_date, to_date, items]
     ConvertRequest:
       type: object
       properties:
@@ -335,6 +352,38 @@ paths:
                 additionalProperties: true
         '500':
           description: Sync error
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /exchange-rates/range:
+    get:
+      tags: [exchange-rate]
+      summary: Get exchange rates within a date range
+      parameters:
+        - in: query
+          name: base
+          required: true
+          schema: { type: string, pattern: '^[A-Z]{3}$' }
+        - in: query
+          name: quote
+          required: true
+          schema: { type: string, pattern: '^[A-Z]{3}$' }
+        - in: query
+          name: from
+          required: true
+          schema: { type: string, format: date }
+        - in: query
+          name: to
+          required: true
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExchangeRateRange' }
+        '404':
+          description: Rate not found
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
