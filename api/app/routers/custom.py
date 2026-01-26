@@ -80,7 +80,7 @@ def list_institution_asset_changes(
 
     sql = text(
         """
-        WITH balance_fx AS (
+        WITH balance_ranked AS (
           SELECT
             i.id AS institution_id,
             i.name AS institution_name,
@@ -88,6 +88,7 @@ def list_institution_asset_changes(
             pb.as_of,
             pb.amount,
             fp.currency,
+            DENSE_RANK() OVER (ORDER BY pb.as_of DESC) AS rnk,
         """
         + get_exchange_rate_by_as_of(
             code=":target_code",
@@ -101,6 +102,18 @@ def list_institution_asset_changes(
           JOIN deposit.institutions i ON i.id = fp.institution_id
           WHERE i.user_id = :user_id
             AND fp.status != 'closed'
+        ),
+        balance_fx AS (
+          SELECT
+            institution_id,
+            institution_name,
+            institution_type,
+            as_of,
+            amount,
+            fx_rate
+          FROM balance_ranked
+          WHERE rnk <= 2
+          ORDER BY as_of DESC
         ),
         institution_snapshots AS (
           SELECT
@@ -148,13 +161,19 @@ def list_institution_asset_changes(
         FROM pivot
         WHERE previous_total IS NOT NULL
         ORDER BY delta DESC
-        LIMIT :limit
         """
     )
     rows = db.execute(
         sql,
         {"user_id": current_user.id, "target_code": base_currency, "limit": limit},
     ).mappings()
+    rows = list(rows)
+    limit = min(limit, len(rows))
+    head_count = (limit + 1) // 2   # 前半：向上取整
+    tail_count = limit // 2         # 后半：向下取整
+    head = rows[:head_count]
+    tail = rows[-tail_count:]
+    rows = head + tail
     data = [
         InstitutionAssetChange(
             institution_id=row["institution_id"],

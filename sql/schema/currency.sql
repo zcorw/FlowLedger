@@ -59,5 +59,5 @@ VALUES ('HKD','港币','HK$',2)
 ON CONFLICT (code) DO NOTHING;
 
 INSERT INTO currency.currencies(code, name, symbol, scale)
-VALUES ('JPY', '日元','¥',0)
+VALUES ('JPY', '日元','JP¥',0)
 ON CONFLICT (code) DO NOTHING;
