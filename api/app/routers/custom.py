@@ -388,7 +388,6 @@ def get_total_assets_by_currency(
             "target_code": base_currency,
         },
     ).mappings())
-    print(rows)
     results: List[AssetCurrencyPoint] = [] 
     grouped = defaultdict(list)
     for row in rows:
