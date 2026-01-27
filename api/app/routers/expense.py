@@ -164,6 +164,41 @@ class ExpenseOut(BaseModel):
     note: Optional[str] = None
 
 
+class ExpensePatch(BaseModel):
+    amount: Optional[Decimal] = None
+    currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
+    category_id: Optional[int] = None
+    merchant: Optional[str] = Field(default=None, max_length=255)
+    paid_account_id: Optional[int] = None
+    occurred_at: Optional[datetime] = None
+    source_ref: Optional[str] = Field(default=None, max_length=255)
+    note: Optional[str] = Field(default=None, max_length=1024)
+
+    @validator("amount")
+    def _patch_amount(cls, v: Optional[Decimal]):
+        if v is None:
+            return v
+        v2 = v.quantize(Decimal("0.000001"))
+        if v2 < 0:
+            raise ValueError("amount_must_be_positive")
+        return v2
+
+    @validator("currency")
+    def _patch_currency(cls, v: Optional[str]):
+        if v is None:
+            return v
+        if not v or len(v) != 3 or not v.isalpha():
+            raise ValueError("invalid_currency")
+        return v.upper()
+
+    @validator("merchant", "source_ref", "note")
+    def _strip_patch_optional(cls, v: Optional[str]):
+        if v is None:
+            return v
+        v2 = v.strip()
+        return v2 or None
+
+
 # Idempotent expense create with currency/category validation; source_ref conflict returns 409
 @router.post("/expenses", status_code=201, response_model=ExpenseOut)
 def create_expense(
@@ -216,6 +251,90 @@ def create_expense(
     if cache_key:
         _idem_cache[cache_key] = resp
     return resp
+
+
+@router.get("/expenses/{expense_id}", response_model=ExpenseOut)
+def get_expense(
+    expense_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    exp = (
+        db.query(Expense)
+        .filter(Expense.id == expense_id, Expense.user_id == current_user.id)
+        .first()
+    )
+    if not exp:
+        raise HTTPException(status_code=404, detail="expense_not_found")
+    return ExpenseOut.model_validate(exp, from_attributes=True).model_dump()
+
+
+@router.patch("/expenses/{expense_id}", response_model=ExpenseOut)
+def patch_expense(
+    expense_id: int,
+    payload: ExpensePatch,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    exp = (
+        db.query(Expense)
+        .filter(Expense.id == expense_id, Expense.user_id == current_user.id)
+        .first()
+    )
+    if not exp:
+        raise HTTPException(status_code=404, detail="expense_not_found")
+
+    if payload.currency is not None:
+        exp.currency = _ensure_currency(payload.currency, db)
+    if payload.category_id is not None:
+        if payload.category_id:
+            cat = db.get(ExpenseCategory, payload.category_id)
+            if not cat or cat.user_id != current_user.id:
+                raise HTTPException(status_code=422, detail="invalid_category")
+        exp.category_id = payload.category_id
+    if payload.amount is not None:
+        exp.amount = payload.amount
+    if payload.merchant is not None:
+        exp.merchant = payload.merchant
+    if payload.paid_account_id is not None:
+        exp.paid_account_id = payload.paid_account_id
+    if payload.occurred_at is not None:
+        exp.occurred_at = payload.occurred_at
+    if payload.source_ref is not None and payload.source_ref != exp.source_ref:
+        if payload.source_ref:
+            dup = (
+                db.query(Expense)
+                .filter(Expense.user_id == current_user.id, Expense.source_ref == payload.source_ref)
+                .first()
+            )
+            if dup:
+                raise HTTPException(status_code=409, detail="duplicate_source_ref")
+        exp.source_ref = payload.source_ref
+    if payload.note is not None:
+        exp.note = payload.note
+
+    exp.updated_at = _now()
+    db.commit()
+    db.refresh(exp)
+    return ExpenseOut.model_validate(exp, from_attributes=True).model_dump()
+
+
+@router.delete("/expenses/{expense_id}", response_model=ExpenseOut)
+def delete_expense(
+    expense_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    exp = (
+        db.query(Expense)
+        .filter(Expense.id == expense_id, Expense.user_id == current_user.id)
+        .first()
+    )
+    if not exp:
+        raise HTTPException(status_code=404, detail="expense_not_found")
+    db.delete(exp)
+    db.commit()
+    return ExpenseOut.model_validate(exp, from_attributes=True).model_dump()
 
 
 class ExpenseListOut(BaseModel):

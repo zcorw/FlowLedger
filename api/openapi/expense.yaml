@@ -45,6 +45,17 @@ components:
         source_ref: { type: string, nullable: true }
         note: { type: string, nullable: true }
       required: [amount, currency, occurred_at]
+    ExpensePatch:
+      type: object
+      properties:
+        amount: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        category_id: { type: integer, format: int64, nullable: true }
+        merchant: { type: string, nullable: true }
+        paid_account_id: { type: integer, format: int64, nullable: true }
+        occurred_at: { type: string, format: date-time }
+        source_ref: { type: string, nullable: true }
+        note: { type: string, nullable: true }
     Category:
       type: object
       properties:
@@ -103,6 +114,63 @@ paths:
                   data:
                     type: array
                     items: { $ref: '#/components/schemas/Expense' }
+  /expenses/{expense_id}:
+    get:
+      tags: [expense]
+      summary: Get expense by id
+      parameters:
+        - in: path
+          name: expense_id
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Expense' }
+        '404':
+          description: Not found
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    patch:
+      tags: [expense]
+      summary: Update expense
+      parameters:
+        - in: path
+          name: expense_id
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpensePatch' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Expense' }
+        '404':
+          description: Not found
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    delete:
+      tags: [expense]
+      summary: Delete expense
+      parameters:
+        - in: path
+          name: expense_id
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Expense' }
+        '404':
+          description: Not found
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
   /categories:
     get:
       tags: [expense]
