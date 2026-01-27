@@ -6,7 +6,7 @@ from typing import List, Optional
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -73,6 +73,18 @@ class AssetCurrencyPoint(BaseModel):
     change: Decimal
     rate: Decimal
     currency: str
+    
+    @field_serializer("amount")
+    def serialize_amount(self, v: Decimal):
+        return float(v)
+    
+    @field_serializer("change")
+    def serialize_change(self, v: Decimal):
+        return float(v)
+    
+    @field_serializer("rate")
+    def serialize_rate(self, v: Decimal):
+        return float(v)
     
 class AssetCurrencyTotalOut(BaseModel):
     data: List[AssetCurrencyPoint]
