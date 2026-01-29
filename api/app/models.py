@@ -128,6 +128,7 @@ class ExpenseCategory(Base):
         nullable=False,
     )
     name: Mapped[str] = mapped_column(String, nullable=False)
+    tax: Mapped[Decimal] = mapped_column(Numeric(7, 6), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -147,6 +148,7 @@ class Expense(Base):
         ForeignKey("user.users.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    name: Mapped[str] = mapped_column(String, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     currency: Mapped[str] = mapped_column(String, nullable=False)
     category_id: Mapped[int | None] = mapped_column(

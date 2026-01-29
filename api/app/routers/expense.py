@@ -4,17 +4,25 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, Field, validator
+from pathlib import Path
+
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
+from pydantic import BaseModel, ConfigDict, Field, validator, field_serializer
 from sqlalchemy.orm import Session
 
-from ..db import SessionLocal
-from ..models import Currency, Expense, ExpenseCategory, User
 from ..auth import resolve_user_id
+from ..db import SessionLocal
+from ..import_tasks import create_task, get_task, save_upload_file, update_task
+from ..models import Currency, Expense, ExpenseCategory, User
+from ..receipt_ocr import ReceiptOcrError, recognize_receipt
+from ..schemas.import_task import ImportTaskCreateResponse, ImportTaskStatus
 
 router = APIRouter(prefix="/v1", tags=["expense"])
 
 _idem_cache: dict[str, dict] = {}
+logger = logging.getLogger(__name__)
 
 
 def get_db():
@@ -27,6 +35,61 @@ def get_db():
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _ensure_image_upload(upload: UploadFile) -> str:
+    filename = upload.filename or ""
+    if not filename:
+        raise HTTPException(status_code=422, detail="missing_filename")
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+        raise HTTPException(status_code=422, detail="invalid_file_type")
+    return filename
+
+
+def _public_task(task: dict) -> dict:
+    payload = dict(task)
+    payload.pop("owner_id", None)
+    return payload
+
+
+def _process_receipt_ocr_task(task_id: str, file_path: str, user_id: int) -> None:
+    update_task(task_id, status="processing", stage="loading_categories", progress=10)
+    db = SessionLocal()
+    try:
+        user = db.get(User, user_id)
+        if not user:
+            update_task(task_id, status="failed", stage="failed", error="user_not_found")
+            return
+        categories = (
+            db.query(ExpenseCategory)
+            .filter(ExpenseCategory.user_id == user.id)
+            .order_by(ExpenseCategory.id.asc())
+            .all()
+        )
+        category_names = [c.name for c in categories]
+        if not category_names:
+            category_names = ["其他"]
+
+        update_task(task_id, stage="recognizing", progress=30)
+        result = recognize_receipt(Path(file_path), category_names)
+        update_task(
+            task_id,
+            status="succeeded",
+            stage="completed",
+            progress=100,
+            result=result,
+        )
+    except ReceiptOcrError as exc:
+        update_task(task_id, status="failed", stage="failed", error=str(exc))
+    except Exception:
+        update_task(task_id, status="failed", stage="failed", error="receipt_ocr_failed")
+    finally:
+        db.close()
+        try:
+            Path(file_path).unlink()
+        except FileNotFoundError:
+            pass
 
 
 def get_current_user(
@@ -64,6 +127,11 @@ class CategoryOut(BaseModel):
 
     id: int
     name: str
+    tax: Decimal
+    
+    @field_serializer("tax")
+    def serialize_tax(self, v: Decimal):
+        return float(v)
 
 
 # Idempotent category create scoped per user; duplicate name returns 409
@@ -120,6 +188,7 @@ def list_categories(
 
 
 class ExpenseIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
     amount: Decimal = Field(...)
     currency: str = Field(..., min_length=3, max_length=3)
     category_id: Optional[int] = None
@@ -128,6 +197,13 @@ class ExpenseIn(BaseModel):
     occurred_at: datetime
     source_ref: Optional[str] = Field(default=None, max_length=255)
     note: Optional[str] = Field(default=None, max_length=1024)
+
+    @validator("name")
+    def _name(cls, v: str):
+        name = v.strip()
+        if not name:
+            raise ValueError("empty_name")
+        return name
 
     @validator("amount")
     def _amount(cls, v: Decimal):
@@ -154,6 +230,7 @@ class ExpenseOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    name: str
     amount: Decimal
     currency: str
     category_id: Optional[int] = None
@@ -165,6 +242,7 @@ class ExpenseOut(BaseModel):
 
 
 class ExpensePatch(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=255)
     amount: Optional[Decimal] = None
     currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
     category_id: Optional[int] = None
@@ -173,6 +251,15 @@ class ExpensePatch(BaseModel):
     occurred_at: Optional[datetime] = None
     source_ref: Optional[str] = Field(default=None, max_length=255)
     note: Optional[str] = Field(default=None, max_length=1024)
+
+    @validator("name")
+    def _patch_name(cls, v: Optional[str]):
+        if v is None:
+            return v
+        name = v.strip()
+        if not name:
+            raise ValueError("empty_name")
+        return name
 
     @validator("amount")
     def _patch_amount(cls, v: Optional[Decimal]):
@@ -233,6 +320,7 @@ def create_expense(
     now = _now()
     exp = Expense(
         user_id=current_user.id,
+        name=payload.name,
         amount=payload.amount,
         currency=payload.currency,
         category_id=payload.category_id,
@@ -294,6 +382,8 @@ def patch_expense(
         exp.category_id = payload.category_id
     if payload.amount is not None:
         exp.amount = payload.amount
+    if payload.name is not None:
+        exp.name = payload.name
     if payload.merchant is not None:
         exp.merchant = payload.merchant
     if payload.paid_account_id is not None:
@@ -345,6 +435,24 @@ class ExpenseListOut(BaseModel):
     data: List[ExpenseOut]
 
 
+class ExpenseBatchIn(BaseModel):
+    items: List[ExpenseIn] = Field(default_factory=list)
+
+
+class ExpenseBatchItem(BaseModel):
+    index: int
+    status: str
+    expense: Optional[ExpenseOut] = None
+    error: Optional[str] = None
+
+
+class ExpenseBatchOut(BaseModel):
+    total: int
+    created: int
+    failed: int
+    items: List[ExpenseBatchItem]
+
+
 # Paginated expense list with optional time range, ordered by occurred_at desc
 @router.get("/expenses", response_model=ExpenseListOut)
 def list_expenses(
@@ -376,3 +484,111 @@ def list_expenses(
         "has_next": (page * page_size) < total,
         "data": data,
     }
+
+
+@router.post("/expenses/batch", status_code=201, response_model=ExpenseBatchOut)
+def batch_create_expenses(
+    payload: ExpenseBatchIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    results: List[ExpenseBatchItem] = []
+    created = 0
+    for idx, item in enumerate(payload.items):
+        try:
+            _ensure_currency(item.currency, db)
+            if item.category_id:
+                cat = db.get(ExpenseCategory, item.category_id)
+                if not cat or cat.user_id != current_user.id:
+                    raise HTTPException(status_code=422, detail="invalid_category")
+            if item.source_ref:
+                dup = (
+                    db.query(Expense)
+                    .filter(Expense.user_id == current_user.id, Expense.source_ref == item.source_ref)
+                    .first()
+                )
+                if dup:
+                    raise HTTPException(status_code=409, detail="duplicate_source_ref")
+
+            now = _now()
+            exp = Expense(
+                user_id=current_user.id,
+                name=item.name,
+                amount=item.amount,
+                currency=item.currency,
+                category_id=item.category_id,
+                merchant=item.merchant,
+                paid_account_id=item.paid_account_id,
+                occurred_at=item.occurred_at,
+                source_ref=item.source_ref,
+                note=item.note,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(exp)
+            db.commit()
+            db.refresh(exp)
+            created += 1
+            results.append(
+                ExpenseBatchItem(
+                    index=idx,
+                    status="created",
+                    expense=ExpenseOut.model_validate(exp, from_attributes=True),
+                )
+            )
+        except HTTPException as exc:
+            db.rollback()
+            results.append(
+                ExpenseBatchItem(index=idx, status="failed", error=str(exc.detail))
+            )
+        except Exception:
+            db.rollback()
+            logger.exception("expense_batch_create_failed idx=%s", idx)
+            results.append(ExpenseBatchItem(index=idx, status="failed", error="expense_create_failed"))
+
+    return ExpenseBatchOut(
+        total=len(results),
+        created=created,
+        failed=len(results) - created,
+        items=results,
+    ).model_dump()
+
+
+@router.post(
+    "/import/expense/receipt",
+    status_code=202,
+    response_model=ImportTaskCreateResponse,
+)
+def upload_receipt(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    filename = _ensure_image_upload(file)
+    stored_path = save_upload_file(file)
+    task_id = create_task(
+        "expense_receipt_ocr",
+        filename=filename,
+        size=stored_path.stat().st_size,
+        owner_id=current_user.id,
+    )
+    background_tasks.add_task(
+        _process_receipt_ocr_task,
+        task_id,
+        str(stored_path),
+        current_user.id,
+    )
+    return ImportTaskCreateResponse(task_id=task_id)
+
+
+@router.get(
+    "/import/expense/receipt/tasks/{task_id}",
+    response_model=ImportTaskStatus,
+)
+def get_receipt_task(task_id: str, current_user: User = Depends(get_current_user)):
+    task = get_task(task_id)
+    if not task or task.get("kind") != "expense_receipt_ocr":
+        raise HTTPException(status_code=404, detail="task_not_found")
+    if task.get("owner_id") != current_user.id:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    return _public_task(task)

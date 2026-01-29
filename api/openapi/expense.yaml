@@ -56,6 +56,36 @@ components:
         occurred_at: { type: string, format: date-time }
         source_ref: { type: string, nullable: true }
         note: { type: string, nullable: true }
+    ExpenseBatchIn:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Expense' }
+    ExpenseBatchItem:
+      type: object
+      properties:
+        index: { type: integer }
+        status: { type: string }
+        expense: { $ref: '#/components/schemas/Expense' }
+        error: { type: string, nullable: true }
+    ExpenseBatchOut:
+      type: object
+      properties:
+        total: { type: integer }
+        created: { type: integer }
+        failed: { type: integer }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ExpenseBatchItem' }
+    ReceiptOcrResult:
+      type: object
+      properties:
+        消费名称: { type: string }
+        消费金额: { type: number }
+        消费商家名称: { type: string }
+        消费时间: { type: string }
+        消费分类: { type: string }
     Category:
       type: object
       properties:
@@ -114,6 +144,21 @@ paths:
                   data:
                     type: array
                     items: { $ref: '#/components/schemas/Expense' }
+  /expenses/batch:
+    post:
+      tags: [expense]
+      summary: Batch create expenses
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpenseBatchIn' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExpenseBatchOut' }
   /expenses/{expense_id}:
     get:
       tags: [expense]
@@ -171,6 +216,57 @@ paths:
         '404':
           description: Not found
           content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /import/expense/receipt:
+    post:
+      tags: [expense]
+      summary: Upload receipt image for OCR
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id: { type: string }
+  /import/expense/receipt/tasks/{task_id}:
+    get:
+      tags: [expense]
+      summary: Get receipt OCR task result
+      parameters:
+        - in: path
+          name: task_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id: { type: string }
+                  kind: { type: string }
+                  status: { type: string }
+                  progress: { type: integer }
+                  stage: { type: string, nullable: true }
+                  filename: { type: string, nullable: true }
+                  size: { type: integer, nullable: true }
+                  result: { $ref: '#/components/schemas/ReceiptOcrResult' }
+                  error: { type: string, nullable: true }
+                  created_at: { type: string, format: date-time }
+                  updated_at: { type: string, format: date-time }
   /categories:
     get:
       tags: [expense]
