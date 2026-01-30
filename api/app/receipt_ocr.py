@@ -53,12 +53,18 @@ def recognize_receipt(image_path: Path, categories: List[str]) -> Dict[str, Any]
     category_list = ", ".join(categories) if categories else "其他"
 
     prompt = (
-        "Extract receipt line items and return a JSON object only. "
-        "Top-level fields must include: items, merchant, occurred_at. "
-        "merchant is the receipt's merchant name or empty string if unavailable. "
-        "occurred_at should be 'YYYY-MM-DD HH:MM' if available, otherwise empty string. "
-        "Each item must include: name, amount, type. "
-        "amount must be a number. "
+        "You are a receipt summarization engine."
+
+        "Hard constraints (must follow):"
+        "- Output ONLY valid JSON. No markdown, no explanations."
+        "- Produce EXACTLY ONE summary record."
+        "- ALL fields are REQUIRED. Do NOT output null or empty values."
+        "- If information is unclear, infer the most reasonable value from the receipt context."
+        "- Do not invent merchants, prices, or dates not supported by the receipt."
+        "- amount must be the final total actually paid by the customer."
+        "- occurred_at must be ISO 8601 format. Include timezone if the receipt implies one."
+        "- type MUST be selected from the provided type options."
+        "- name must be a concise, human-readable summary of the entire purchase."
         f"type must be one of: {category_list}."
     )
 
@@ -66,23 +72,13 @@ def recognize_receipt(image_path: Path, categories: List[str]) -> Dict[str, Any]
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "items": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "name": {"type": "string"},
-                        "amount": {"type": "number"},
-                        "type": {"type": "string"},
-                    },
-                    "required": ["name", "amount", "type"],
-                },
-            },
+            "name": {"type": "string"},
+            "amount": {"type": "number"},
+            "type": {"type": "string"},
             "merchant": {"type": "string"},
             "occurred_at": {"type": "string"},
         },
-        "required": ["items", "merchant", "occurred_at"],
+        "required": ["name", "amount", "type", "merchant", "occurred_at"],
     }
 
     payload = {

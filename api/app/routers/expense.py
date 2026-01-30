@@ -306,7 +306,7 @@ def create_expense(
             raise HTTPException(status_code=422, detail="invalid_category")
     
     if payload.file_id:
-        file = db.get(File, payload.file_id)
+        file = db.get(FileAsset, payload.file_id)
         if not file or file.user_id != current_user.id:
             raise HTTPException(status_code=422, detail="invalid_file")
 
