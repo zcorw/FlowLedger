@@ -1,26 +1,6 @@
 -- Migration helper: auth/email columns (idempotent).
 ALTER TABLE "expense".expenses 
-    ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
-ALTER TABLE "expense".expense_categories
-    ADD COLUMN IF NOT EXISTS tax NUMERIC(7,6) NOT NULL DEFAULT 0.0;
--- Backfill tax for existing categories (idempotent).
-UPDATE "expense".expense_categories AS ec
-SET tax = v.tax
-FROM (
-    VALUES
-        ('餐饮', 0.08),
-        ('住房', 0.1),
-        ('交通', 0.1),
-        ('日用品', 0.1),
-        ('健康', 0.1),
-        ('教育', 0.1),
-        ('旅行', 0.1),
-        ('娱乐', 0.1),
-        ('水电网', 0.1),
-        ('礼物', 0.1)
-) AS v(name, tax)
-WHERE ec.name = v.name
-  AND ec.tax <> v.tax;
+    ADD COLUMN IF NOT EXISTS file_id BIGINT NULL REFERENCES file.files(id) ON DELETE SET NULL;
 -- Ensure unique constraints for username/email.
 DO $$
 BEGIN

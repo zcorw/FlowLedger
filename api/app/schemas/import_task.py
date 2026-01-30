@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 class ImportTaskCreateResponse(BaseModel):
     task_id: str
+    file_id: Optional[int] = None
 
 
 class ImportTaskStatus(BaseModel):

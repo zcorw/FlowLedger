@@ -239,6 +239,7 @@ paths:
                 type: object
                 properties:
                   task_id: { type: string }
+                  file_id: { type: integer, format: int64, nullable: true }
   /import/expense/receipt/tasks/{task_id}:
     get:
       tags: [expense]

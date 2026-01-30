@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from ..auth import resolve_user_id
 from ..db import SessionLocal
 from ..import_tasks import create_task, get_task, save_upload_file, update_task
-from ..models import Currency, Expense, ExpenseCategory, User
+from ..models import Currency, Expense, ExpenseCategory, FileAsset, User
 from ..receipt_ocr import ReceiptOcrError, recognize_receipt
 from ..schemas.import_task import ImportTaskCreateResponse, ImportTaskStatus
 
@@ -86,10 +86,6 @@ def _process_receipt_ocr_task(task_id: str, file_path: str, user_id: int) -> Non
         update_task(task_id, status="failed", stage="failed", error="receipt_ocr_failed")
     finally:
         db.close()
-        try:
-            Path(file_path).unlink()
-        except FileNotFoundError:
-            pass
 
 
 def get_current_user(
@@ -197,6 +193,7 @@ class ExpenseIn(BaseModel):
     occurred_at: datetime
     source_ref: Optional[str] = Field(default=None, max_length=255)
     note: Optional[str] = Field(default=None, max_length=1024)
+    file_id: Optional[int] = None
 
     @validator("name")
     def _name(cls, v: str):
@@ -307,6 +304,11 @@ def create_expense(
         cat = db.get(ExpenseCategory, payload.category_id)
         if not cat or cat.user_id != current_user.id:
             raise HTTPException(status_code=422, detail="invalid_category")
+    
+    if payload.file_id:
+        file = db.get(File, payload.file_id)
+        if not file or file.user_id != current_user.id:
+            raise HTTPException(status_code=422, detail="invalid_file")
 
     if payload.source_ref:
         dup = (
@@ -329,6 +331,7 @@ def create_expense(
         occurred_at=payload.occurred_at,
         source_ref=payload.source_ref,
         note=payload.note,
+        file_id=payload.file_id,
         created_at=now,
         updated_at=now,
     )
@@ -566,6 +569,23 @@ def upload_receipt(
 ):
     filename = _ensure_image_upload(file)
     stored_path = save_upload_file(file)
+    now = _now()
+    db = SessionLocal()
+    try:
+        file_meta = FileAsset(
+            user_id=current_user.id,
+            filename=filename,
+            content_type=file.content_type,
+            storage_path=str(stored_path),
+            size=stored_path.stat().st_size,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(file_meta)
+        db.commit()
+        db.refresh(file_meta)
+    finally:
+        db.close()
     task_id = create_task(
         "expense_receipt_ocr",
         filename=filename,
@@ -578,7 +598,7 @@ def upload_receipt(
         str(stored_path),
         current_user.id,
     )
-    return ImportTaskCreateResponse(task_id=task_id)
+    return ImportTaskCreateResponse(task_id=task_id, file_id=file_meta.id)
 
 
 @router.get(

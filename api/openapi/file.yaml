@@ -1,0 +1,66 @@
+openapi: 3.1.0
+info:
+  title: Flow-Ledger File API
+  version: 1.0.0
+  description: 上传文件并返回 file_id 供业务关联
+servers:
+  - url: https://api.example.com/v1
+security:
+  - OAuth2: [read:files]
+components:
+  securitySchemes:
+    OAuth2:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.example.com/oauth/authorize
+          tokenUrl: https://auth.example.com/oauth/token
+          scopes:
+            read:files: 读写文件元数据
+  schemas:
+    FileMeta:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        filename: { type: string }
+        content_type: { type: string, nullable: true }
+        size: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+      required: [id, filename, size, created_at]
+paths:
+  /files:
+    post:
+      tags: [file]
+      summary: 上传文件并返回 file_id
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+              required: [file]
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileMeta' }
+  /files/{file_id}:
+    get:
+      tags: [file]
+      summary: 获取文件元数据
+      parameters:
+        - in: path
+          name: file_id
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileMeta' }

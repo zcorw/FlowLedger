@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS expense.expenses (
   occurred_at     TIMESTAMPTZ NOT NULL,
   source_ref      TEXT   NULL,
   note            TEXT   NULL,
+  file_id         BIGINT NULL REFERENCES file.files(id) ON DELETE SET NULL,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT ck_expenses__amount_positive CHECK (amount >= 0)

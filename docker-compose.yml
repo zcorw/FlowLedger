@@ -88,7 +88,7 @@ services:
       # Prefer POSTGRES_* as the single source of truth; DATABASE_URL is optional.
       DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-flow_ledger}:${POSTGRES_PASSWORD:-flow_ledger}@db:5432/${POSTGRES_DB:-flow_ledger}}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      UPLOAD_DIR: ${UPLOAD_DIR:-/data/uploads}
+      UPLOAD_DIR: /data/uploads
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:

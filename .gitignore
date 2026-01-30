@@ -23,6 +23,7 @@ build/
 dist/
 *.egg-info/
 .eggs/
+data/
 
 # Caches & tooling
 .pytest_cache/

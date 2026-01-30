@@ -161,6 +161,11 @@ class Expense(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     note: Mapped[str | None] = mapped_column(String, nullable=True)
+    file_id: Mapped[int | None] = mapped_column(
+        _id_type, 
+        ForeignKey("file.files.id", ondelete="SET NULL"),
+        nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -238,5 +243,27 @@ class ProductBalance(Base):
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class FileAsset(Base):
+    __tablename__ = "files"
+    __table_args__ = (
+        {"schema": "file"},
+    )
+
+    _id_type = BigInteger().with_variant(Integer, "sqlite")
+
+    id: Mapped[int] = mapped_column(_id_type, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        _id_type,
+        ForeignKey("user.users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    filename: Mapped[str] = mapped_column(String, nullable=False)
+    content_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    storage_path: Mapped[str] = mapped_column(String, nullable=False)
+    size: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
