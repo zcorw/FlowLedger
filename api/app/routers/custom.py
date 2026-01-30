@@ -89,6 +89,17 @@ class AssetCurrencyPoint(BaseModel):
 class AssetCurrencyTotalOut(BaseModel):
     data: List[AssetCurrencyPoint]
     
+class ExpensePeriodCompareOut(BaseModel):
+    currency: str
+    current_from: datetime
+    current_to: datetime
+    current_total: Decimal
+    previous_from: datetime
+    previous_to: datetime
+    previous_total: Decimal
+    delta: Decimal
+    delta_rate: Decimal
+    
 
 @router.get("/institutions/assets/changes", response_model=InstitutionAssetChangeOut)
 def list_institution_asset_changes(
@@ -415,5 +426,113 @@ def get_total_assets_by_currency(
         ))
     return AssetCurrencyTotalOut(
         data=results
+    ).model_dump()
+
+
+@router.get("/expenses/total/compare", response_model=ExpensePeriodCompareOut)
+def get_expense_total_compare(
+    from_dt: Optional[datetime] = Query(None, alias="from"),
+    to_dt: Optional[datetime] = Query(None, alias="to"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not from_dt or not to_dt:
+        raise HTTPException(status_code=422, detail="missing_time_range")
+    if from_dt >= to_dt:
+        raise HTTPException(status_code=422, detail="invalid_time_range")
+
+    duration = to_dt - from_dt
+    prev_from = from_dt - duration
+    prev_to = from_dt
+
+    pref = db.query(UserPreference).filter(UserPreference.user_id == current_user.id).first()
+    if not pref:
+        raise HTTPException(status_code=404, detail="user_pref_not_found")
+    base_currency = pref.base_currency
+
+    sql = text(
+        """
+        WITH current_fx AS (
+          SELECT
+            e.amount,
+            e.currency,
+            e.occurred_at,
+        """
+        + get_exchange_rate_by_as_of(
+            code=":target_code",
+            as_of="e",
+            column="fx_rate",
+            currency="e",
+            as_of_column="occurred_at",
+        )
+        + """
+          FROM expense.expenses e
+          WHERE e.user_id = :user_id
+            AND e.occurred_at >= :from_dt
+            AND e.occurred_at < :to_dt
+        ),
+        current_total AS (
+          SELECT COALESCE(SUM(amount * fx_rate), 0) AS total
+          FROM current_fx
+          WHERE fx_rate IS NOT NULL
+        ),
+        previous_fx AS (
+          SELECT
+            e.amount,
+            e.currency,
+            e.occurred_at,
+        """
+        + get_exchange_rate_by_as_of(
+            code=":target_code",
+            as_of="e",
+            column="fx_rate",
+            currency="e",
+            as_of_column="occurred_at",
+        )
+        + """
+          FROM expense.expenses e
+          WHERE e.user_id = :user_id
+            AND e.occurred_at >= :prev_from
+            AND e.occurred_at < :prev_to
+        ),
+        previous_total AS (
+          SELECT COALESCE(SUM(amount * fx_rate), 0) AS total
+          FROM previous_fx
+          WHERE fx_rate IS NOT NULL
+        )
+        SELECT
+          current_total.total AS current_total,
+          previous_total.total AS previous_total
+        FROM current_total
+        CROSS JOIN previous_total
+        """
+    )
+    row = db.execute(
+        sql,
+        {
+            "user_id": current_user.id,
+            "from_dt": from_dt,
+            "to_dt": to_dt,
+            "prev_from": prev_from,
+            "prev_to": prev_to,
+            "target_code": base_currency,
+        },
+    ).mappings().first()
+
+    current_total = row["current_total"] if row else Decimal("0")
+    previous_total = row["previous_total"] if row else Decimal("0")
+    delta = current_total - previous_total
+    delta_rate = delta / previous_total if previous_total else Decimal("0")
+
+    return ExpensePeriodCompareOut(
+        currency=base_currency,
+        current_from=from_dt,
+        current_to=to_dt,
+        current_total=current_total,
+        previous_from=prev_from,
+        previous_to=prev_to,
+        previous_total=previous_total,
+        delta=delta,
+        delta_rate=delta_rate,
     ).model_dump()
     
