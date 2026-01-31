@@ -48,6 +48,40 @@ class BotService:
         await self.state.set_user_id(telegram_user_id, link_data["id"])
         return link_data["id"], None
 
+    async def login_and_link(
+        self, telegram_user_id: int, username: str, password: str
+    ) -> Tuple[Optional[int], Optional[str]]:
+        if telegram_user_id is None:
+            return None, "Missing Telegram user information."
+        if not self.client:
+            return None, "HTTP client is not ready."
+        if not username or not password:
+            return None, "Username and password are required."
+
+        try:
+            resp = await self.client.post(
+                "/auth/login",
+                json={"username": username, "password": password},
+            )
+        except Exception as exc:
+            return None, f"Failed to login: {exc}"
+
+        if resp.status_code >= 400:
+            return None, f"Login failed: {resp.text}"
+
+        data = resp.json()
+        user = data.get("user") or {}
+        user_id = user.get("id")
+        if not user_id:
+            return None, "Login succeeded but user_id is missing."
+
+        link_data, err = await self.link_user(user_id, telegram_user_id, link_token=None)
+        if err:
+            return None, err
+
+        await self.state.set_user_id(telegram_user_id, link_data["id"])
+        return link_data["id"], None
+
     async def link_user(
         self, user_id: int, telegram_user_id: int, link_token: Optional[str]
     ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:

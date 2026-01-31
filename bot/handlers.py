@@ -28,10 +28,19 @@ def get_service() -> BotService:
 async def handle_start(message: Message) -> None:
     svc = get_service()
     user = message.from_user
-    user_id, err = await svc.ensure_user(user.id if user else None)
-    if not user_id:
-        await message.answer(f"Unable to initialize your account: {err}")
-        return
+    text = (message.text or "").split(maxsplit=2)
+    if len(text) >= 3:
+        username = text[1].strip()
+        password = text[2].strip()
+        user_id, err = await svc.login_and_link(user.id if user else None, username, password)
+        if not user_id:
+            await message.answer(f"Unable to link your account: {err}")
+            return
+    else:
+        user_id, err = await svc.ensure_user(user.id if user else None)
+        if not user_id:
+            await message.answer(f"Unable to initialize your account: {err}")
+            return
 
     prefs, _ = await svc.fetch_preferences(user_id)
     greeting = "Welcome to Flow-Ledger bot!"
@@ -56,6 +65,7 @@ async def handle_help(message: Message) -> None:
     await message.answer(
         "Available commands:\n"
         "/start - initialize and link your account\n"
+        "/start <username> <password> - link to an existing account\n"
         "/help - show this help message\n"
         "/me - show your user id and preferences\n"
         "/link &lt;token&gt; - link to an existing Flow-Ledger account\n"
