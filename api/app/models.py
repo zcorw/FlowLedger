@@ -151,6 +151,11 @@ class Expense(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     currency: Mapped[str] = mapped_column(String, nullable=False)
+    file_id: Mapped[int | None] = mapped_column(
+        _id_type,
+        ForeignKey("file.files.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     category_id: Mapped[int | None] = mapped_column(
         _id_type,
         ForeignKey("expense.expense_categories.id", ondelete="SET NULL"),
@@ -161,11 +166,6 @@ class Expense(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     note: Mapped[str | None] = mapped_column(String, nullable=True)
-    file_id: Mapped[int | None] = mapped_column(
-        _id_type, 
-        ForeignKey("file.files.id", ondelete="SET NULL"),
-        nullable=True
-    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

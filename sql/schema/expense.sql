@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS expense.expenses (
   name            TEXT   NOT NULL DEFAULT '',
   amount          NUMERIC(20,6) NOT NULL,
   currency        TEXT   NOT NULL REFERENCES currency.currencies(code) ON DELETE RESTRICT,
+  file_id         BIGINT NULL REFERENCES file.files(id) ON DELETE SET NULL,
   category_id     BIGINT NULL REFERENCES expense.expense_categories(id) ON DELETE SET NULL,
   merchant        TEXT   NULL,
   tags            TEXT[] NULL,
@@ -66,7 +67,6 @@ CREATE TABLE IF NOT EXISTS expense.expenses (
   occurred_at     TIMESTAMPTZ NOT NULL,
   source_ref      TEXT   NULL,
   note            TEXT   NULL,
-  file_id         BIGINT NULL REFERENCES file.files(id) ON DELETE SET NULL,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT ck_expenses__amount_positive CHECK (amount >= 0)

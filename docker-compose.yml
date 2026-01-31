@@ -46,6 +46,7 @@ services:
          /work/sql/schema/extensions.sql \
          /work/sql/schema/currency.sql \
          /work/sql/schema/user.sql \
+         /work/sql/schema/file.sql \
          /work/sql/schema/deposit.sql \
          /work/sql/schema/expense.sql \
          /work/sql/schema/loan.sql \

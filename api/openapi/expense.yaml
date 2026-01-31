@@ -38,6 +38,7 @@ components:
         id: { type: integer, format: int64, readOnly: true }
         amount: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
         currency: { type: string, pattern: '^[A-Z]{3}$' }
+        file_id: { type: integer, format: int64, nullable: true }
         category_id: { type: integer, format: int64, nullable: true }
         merchant: { type: string, nullable: true }
         paid_account_id: { type: integer, format: int64, nullable: true }
@@ -50,6 +51,7 @@ components:
       properties:
         amount: { type: string, pattern: '^\d+(\.\d{1,6})?$' }
         currency: { type: string, pattern: '^[A-Z]{3}$' }
+        file_id: { type: integer, format: int64, nullable: true }
         category_id: { type: integer, format: int64, nullable: true }
         merchant: { type: string, nullable: true }
         paid_account_id: { type: integer, format: int64, nullable: true }

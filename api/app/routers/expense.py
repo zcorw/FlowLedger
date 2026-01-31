@@ -107,6 +107,15 @@ def _ensure_currency(code: str, db: Session) -> str:
     return code
 
 
+def _ensure_file_id(file_id: Optional[int], user_id: int, db: Session) -> Optional[int]:
+    if file_id is None:
+        return None
+    file_meta = db.get(FileAsset, file_id)
+    if not file_meta or file_meta.user_id != user_id:
+        raise HTTPException(status_code=422, detail="invalid_file_id")
+    return file_id
+
+
 class CategoryIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
 
@@ -187,13 +196,13 @@ class ExpenseIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     amount: Decimal = Field(...)
     currency: str = Field(..., min_length=3, max_length=3)
+    file_id: Optional[int] = None
     category_id: Optional[int] = None
     merchant: Optional[str] = Field(default=None, max_length=255)
     paid_account_id: Optional[int] = None
     occurred_at: datetime
     source_ref: Optional[str] = Field(default=None, max_length=255)
     note: Optional[str] = Field(default=None, max_length=1024)
-    file_id: Optional[int] = None
 
     @validator("name")
     def _name(cls, v: str):
@@ -230,6 +239,7 @@ class ExpenseOut(BaseModel):
     name: str
     amount: Decimal
     currency: str
+    file_id: Optional[int] = None
     category_id: Optional[int] = None
     merchant: Optional[str] = None
     paid_account_id: Optional[int] = None
@@ -242,6 +252,7 @@ class ExpensePatch(BaseModel):
     name: Optional[str] = Field(default=None, max_length=255)
     amount: Optional[Decimal] = None
     currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
+    file_id: Optional[int] = None
     category_id: Optional[int] = None
     merchant: Optional[str] = Field(default=None, max_length=255)
     paid_account_id: Optional[int] = None
@@ -300,6 +311,8 @@ def create_expense(
 
     _ensure_currency(payload.currency, db)
 
+    if payload.file_id is not None:
+        payload.file_id = _ensure_file_id(payload.file_id, current_user.id, db)
     if payload.category_id:
         cat = db.get(ExpenseCategory, payload.category_id)
         if not cat or cat.user_id != current_user.id:
@@ -325,13 +338,13 @@ def create_expense(
         name=payload.name,
         amount=payload.amount,
         currency=payload.currency,
+        file_id=payload.file_id,
         category_id=payload.category_id,
         merchant=payload.merchant,
         paid_account_id=payload.paid_account_id,
         occurred_at=payload.occurred_at,
         source_ref=payload.source_ref,
         note=payload.note,
-        file_id=payload.file_id,
         created_at=now,
         updated_at=now,
     )
@@ -377,6 +390,8 @@ def patch_expense(
 
     if payload.currency is not None:
         exp.currency = _ensure_currency(payload.currency, db)
+    if payload.file_id is not None:
+        exp.file_id = _ensure_file_id(payload.file_id, current_user.id, db)
     if payload.category_id is not None:
         if payload.category_id:
             cat = db.get(ExpenseCategory, payload.category_id)
@@ -500,6 +515,8 @@ def batch_create_expenses(
     for idx, item in enumerate(payload.items):
         try:
             _ensure_currency(item.currency, db)
+            if item.file_id is not None:
+                item.file_id = _ensure_file_id(item.file_id, current_user.id, db)
             if item.category_id:
                 cat = db.get(ExpenseCategory, item.category_id)
                 if not cat or cat.user_id != current_user.id:
@@ -519,6 +536,7 @@ def batch_create_expenses(
                 name=item.name,
                 amount=item.amount,
                 currency=item.currency,
+                file_id=item.file_id,
                 category_id=item.category_id,
                 merchant=item.merchant,
                 paid_account_id=item.paid_account_id,
