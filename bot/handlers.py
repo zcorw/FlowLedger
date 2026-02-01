@@ -7,9 +7,18 @@ from uuid import uuid4
 
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import Message, CallbackQuery
 
 from service import BotService
+from handler_utils import (
+    extract_ocr_fields,
+    get_cached_token_or_reply,
+    guess_content_type,
+    receipt_keyboard,
+    receipt_preview,
+    user_id_or_none,
+    user_id_or_zero,
+)
 
 
 router = Router()
@@ -26,81 +35,22 @@ def get_service() -> BotService:
         raise RuntimeError("Bot service is not initialized.")
     return _service
 
+class FetchError(Exception):
+    pass
 
-def _extract_ocr_fields(result: dict[str, Any]) -> dict[str, Any]:
-    def pick(*keys: str) -> Any:
-        for key in keys:
-            if key in result:
-                return result[key]
-        return None
-
-    return {
-        "name": pick("name", "消费名称", "娑堣垂鍚嶇О"),
-        "amount": pick("amount", "消费金额", "娑堣垂閲戦"),
-        "type": pick("type", "消费分类", "娑堣垂鍒嗙被"),
-        "merchant": pick("merchant", "消费商家名称", "娑堣垂鍟嗗鍚嶇О"),
-        "occurred_at": pick("occurred_at", "消费时间", "娑堣垂鏃堕棿"),
-    }
-
-
-def _guess_content_type(suffix: str) -> str:
-    ext = suffix.lower()
-    if ext in {".jpg", ".jpeg"}:
-        return "image/jpeg"
-    if ext == ".png":
-        return "image/png"
-    if ext == ".webp":
-        return "image/webp"
-    if ext == ".gif":
-        return "image/gif"
-    return "application/octet-stream"
-
-
-def _receipt_preview(payload: dict[str, Any]) -> str:
-    return (
-        "OCR result:\n"
-        f"- Name: {payload.get('name')}\n"
-        f"- Amount: {payload.get('amount')} {payload.get('currency')}\n"
-        f"- Merchant: {payload.get('merchant')}\n"
-        f"- Time: {payload.get('occurred_at')}\n"
-        f"- Category: {payload.get('_category_name')}\n"
-        f"- Note: {payload.get('note')}\n"
-        "Edit any field or confirm to save."
-    )
-
-
-def _receipt_keyboard(receipt_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Edit Name", callback_data=f"receipt_edit:name:{receipt_id}"),
-                InlineKeyboardButton(text="Edit Amount", callback_data=f"receipt_edit:amount:{receipt_id}"),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="Edit Merchant", callback_data=f"receipt_edit:merchant:{receipt_id}"
-                ),
-                InlineKeyboardButton(text="Edit Time", callback_data=f"receipt_edit:occurred_at:{receipt_id}"),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="Edit Category", callback_data=f"receipt_edit:category:{receipt_id}"
-                ),
-                InlineKeyboardButton(text="Edit Currency", callback_data=f"receipt_edit:currency:{receipt_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="Edit Note", callback_data=f"receipt_edit:note:{receipt_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="Confirm", callback_data=f"receipt_confirm:{receipt_id}"),
-                InlineKeyboardButton(text="Cancel", callback_data=f"receipt_cancel:{receipt_id}"),
-            ],
-        ]
-    )
-
-async def get_categories(token: str) -> Tuple[Optional[List[dict[str, Any]]], Optional[str]]:
+async def get_categories(token: str) -> Optional[List[dict[str, Any]]]:
     svc = get_service()
-    return await svc.list_categories(token)
+    categories, cat_err =  await svc.list_categories(token)
+    if cat_err:
+        raise FetchError(cat_err)
+    return categories
+
+async def get_institutions(token: str) -> Optional[List[dict[str, Any]]]:
+    svc = get_service()
+    institutions, cat_err = await svc.list_institutions(token)
+    if cat_err:
+        raise FetchError(cat_err)
+    return institutions
 
 @router.message(Command("start"))
 async def handle_start(message: Message) -> None:
@@ -113,14 +63,15 @@ async def handle_start(message: Message) -> None:
 
     username = text[1].strip()
     password = text[2].strip()
-    user_id, err = await svc.login_and_link(user.id if user else None, username, password)
+    user_id, err = await svc.login_and_link(user_id_or_none(user), username, password)
     if not user_id:
         await message.answer(f"Unable to link your account: {err}")
         return
 
-    token, token_err = await svc.get_cached_token(user.id if user else None)
+    token = await get_cached_token_or_reply(
+        svc, user, message.answer, "Unable to load preferences"
+    )
     if not token:
-        await message.answer(f"Unable to load preferences: {token_err}")
         return
 
     prefs, _ = await svc.fetch_preferences(token)
@@ -145,12 +96,10 @@ async def handle_start(message: Message) -> None:
 async def handle_help(message: Message) -> None:
     await message.answer(
         "Available commands:\n"
-        "/start <username> <password> - link to an existing account\n"
+        "/start &lt;username&gt; &lt;password&gt; - link to an existing account\n"
         "/help - show this help message\n"
         "/me - show your user id and preferences\n"
         "Send a receipt photo to OCR and save an expense\n"
-        "/link &lt;token&gt; - link to an existing Flow-Ledger account\n"
-        "/set currency|timezone|lang &lt;value&gt; - update your defaults"
     )
 
 
@@ -158,9 +107,10 @@ async def handle_help(message: Message) -> None:
 async def handle_me(message: Message) -> None:
     svc = get_service()
     user = message.from_user
-    token, err = await svc.get_cached_token(user.id if user else None)
+    token = await get_cached_token_or_reply(
+        svc, user, message.answer, "Unable to load your profile"
+    )
     if not token:
-        await message.answer(f"Unable to load your profile: {err}")
         return
 
     me, err_user = await svc.fetch_user(token)
@@ -181,84 +131,21 @@ async def handle_me(message: Message) -> None:
         f"- language: {prefs.get('language')}"
     )
 
-
-@router.message(Command("link"))
-async def handle_link(message: Message) -> None:
-    svc = get_service()
-    user = message.from_user
-    token, err = await svc.get_cached_token(user.id if user else None)
-    if not token:
-        await message.answer(f"Unable to prepare linking: {err}")
-        return
-
-    text = (message.text or "").split(maxsplit=1)
-    if len(text) < 2:
-        await message.answer("Usage: /link &lt;token&gt;")
-        return
-
-    link_token = text[1].strip()
-    data, link_err = await svc.link_user_with_token(
-        token, user.id if user else 0, link_token=link_token
-    )
-    if link_err:
-        await message.answer(link_err)
-        return
-
-    await message.answer(
-        f"Linked successfully.\n"
-        f"user_id: {data.get('id')}\n"
-        f"telegram_user_id: {data.get('telegram_user_id')}"
-    )
-
-
-@router.message(Command("set"))
-async def handle_set(message: Message) -> None:
-    svc = get_service()
-    user = message.from_user
-    token, err = await svc.get_cached_token(user.id if user else None)
-    if not token:
-        await message.answer(f"Unable to update preferences: {err}")
-        return
-
-    parts = (message.text or "").split(maxsplit=2)
-    if len(parts) < 3:
-        await message.answer("Usage: /set currency|timezone|lang &lt;value&gt;")
-        return
-
-    field_key = parts[1].lower()
-    value = parts[2].strip()
-    field_map = {"currency": "base_currency", "timezone": "timezone", "lang": "language"}
-    if field_key not in field_map:
-        await message.answer("Unknown field. Use currency, timezone, or lang.")
-        return
-
-    updated, update_err = await svc.update_preference(token, field_map[field_key], value)
-    if update_err:
-        await message.answer(update_err)
-        return
-
-    await message.answer(
-        "Preferences updated:\n"
-        f"- base_currency: {updated.get('base_currency')}\n"
-        f"- timezone: {updated.get('timezone')}\n"
-        f"- language: {updated.get('language')}"
-    )
-
-
 @router.message(F.photo)
 async def handle_receipt_photo(message: Message) -> None:
     svc = get_service()
     user = message.from_user
-    token, err = await svc.get_cached_token(user.id if user else None)
+    token = await get_cached_token_or_reply(
+        svc, user, message.answer, "Unable to process receipt"
+    )
     if not token:
-        await message.answer(f"Unable to process receipt: {err}")
         return
 
     photo = message.photo[-1]
     tg_file = await message.bot.get_file(photo.file_id)
     suffix = Path(tg_file.file_path or "").suffix or ".jpg"
     filename = f"{photo.file_unique_id}{suffix}"
-    content_type = _guess_content_type(suffix)
+    content_type = guess_content_type(suffix)
     file_obj = await message.bot.download(tg_file)
     if not file_obj:
         await message.answer("Failed to download the photo from Telegram.")
@@ -288,7 +175,7 @@ async def handle_receipt_photo(message: Message) -> None:
                 return
             if task.get("status") == "succeeded":
                 result = task.get("result") or {}
-                fields = _extract_ocr_fields(result)
+                fields = extract_ocr_fields(result)
                 prefs, _ = await svc.fetch_preferences(token)
                 currency = (prefs or {}).get("base_currency")
                 categories, _ = await svc.list_categories(token)
@@ -310,10 +197,11 @@ async def handle_receipt_photo(message: Message) -> None:
                     "occurred_at": fields.get("occurred_at"),
                     "note": "Imported from receipt OCR",
                     "_category_name": fields.get("type"),
+                    "_institution_name": fields.get("institution"),
                 }
-                await svc.state.set_pending_receipt(user.id if user else 0, receipt_id, payload)
+                await svc.state.set_pending_receipt(user_id_or_zero(user), receipt_id, payload)
 
-                await message.answer(_receipt_preview(payload), reply_markup=_receipt_keyboard(receipt_id))
+                await message.answer(receipt_preview(payload), reply_markup=receipt_keyboard(receipt_id))
                 return
             if task.get("status") == "failed":
                 await message.answer("OCR failed. Please try another image.")
@@ -329,13 +217,13 @@ async def handle_receipt_photo(message: Message) -> None:
 async def handle_receipt_confirm(callback: CallbackQuery) -> None:
     svc = get_service()
     user = callback.from_user
-    token, err = await svc.get_cached_token(user.id if user else None)
+    token, err = await svc.get_cached_token(user_id_or_none(user))
     if not token:
         await callback.answer("Please /start <username> <password> first.")
         return
 
     receipt_id = (callback.data or "").split(":", 1)[-1]
-    payload = await svc.state.get_pending_receipt(user.id if user else 0, receipt_id)
+    payload = await svc.state.get_pending_receipt(user_id_or_zero(user), receipt_id)
     if not payload:
         await callback.answer("This receipt request has expired.")
         return
@@ -347,7 +235,7 @@ async def handle_receipt_confirm(callback: CallbackQuery) -> None:
         await callback.message.answer(create_err)
         return
 
-    await svc.state.clear_pending_receipt(user.id if user else 0, receipt_id)
+    await svc.state.clear_pending_receipt(user_id_or_zero(user), receipt_id)
     await callback.answer("Saved.")
     await callback.message.answer(
         f"Expense saved: {created.get('name')} {created.get('amount')} {created.get('currency')}"
@@ -359,7 +247,7 @@ async def handle_receipt_cancel(callback: CallbackQuery) -> None:
     svc = get_service()
     user = callback.from_user
     receipt_id = (callback.data or "").split(":", 1)[-1]
-    await svc.state.clear_pending_receipt(user.id if user else 0, receipt_id)
+    await svc.state.clear_pending_receipt(user_id_or_zero(user), receipt_id)
     await callback.answer("Cancelled.")
     await callback.message.answer("Receipt import cancelled.")
 
@@ -373,28 +261,42 @@ async def handle_receipt_edit(callback: CallbackQuery) -> None:
         await callback.answer("Invalid edit request.")
         return
     field, receipt_id = parts[1], parts[2]
-    payload = await svc.state.get_pending_receipt(user.id if user else 0, receipt_id)
+    payload = await svc.state.get_pending_receipt(user_id_or_zero(user), receipt_id)
     if not payload:
         await callback.answer("This receipt request has expired.")
         return
 
     payload["_awaiting_field"] = field
-    await svc.state.set_pending_receipt(user.id if user else 0, receipt_id, payload)
-    await svc.state.set_active_receipt_edit(user.id if user else 0, receipt_id)
+    await svc.state.set_pending_receipt(user_id_or_zero(user), receipt_id, payload)
+    await svc.state.set_active_receipt_edit(user_id_or_zero(user), receipt_id)
     await callback.answer()
+    token = await get_cached_token_or_reply(
+        svc, user, callback.message.answer, "Missing token"
+    )
     if field == "category":
-        token, err = await svc.get_cached_token(user.id)
         if not token:
-            await callback.message.answer(err or "Missing token.")
             return
-        categories, cat_err = await get_categories(token)
-        if cat_err:
+        try:
+            categories= await get_categories(token)
+        except FetchError as cat_err:
             await callback.message.answer(cat_err)
-        else:
-            cat_list = "\n".join(c.get("name") for c in categories)
-            await callback.message.answer(
-                f"Send new category name for the receipt. Available categories:\n{cat_list}"
-            )
+            return
+        cat_list = "\n".join(c.get("name") for c in categories)
+        await callback.message.answer(
+            f"Send new category name for the receipt. Available categories:\n{cat_list}"
+        )
+    elif field == "institution":
+        if not token:
+            return
+        try:
+            institutions = await get_institutions(token)
+        except FetchError as inst_err:
+            await callback.message.answer(inst_err)
+            return
+        inst_list = "\n".join(i.get("name") for i in institutions)
+        await callback.message.answer(
+            f"Send new institution name for the receipt. Available institutions:\n{inst_list}"
+        )
     else:
         await callback.message.answer(f"Send new value for {field}.")
 
@@ -423,6 +325,11 @@ async def handle_receipt_edit_text(message: Message) -> None:
         return
 
     value = message.text.strip()
+    token = await get_cached_token_or_reply(
+        svc, user, message.answer, "Missing token"
+    )
+    if not token:
+        return
     if field == "amount":
         try:
             float(value)
@@ -444,12 +351,9 @@ async def handle_receipt_edit_text(message: Message) -> None:
     elif field == "note":
         payload["note"] = None if value == "-" else value
     elif field == "category":
-        token, err = await svc.get_cached_token(user.id)
-        if not token:
-            await message.answer(err or "Missing token.")
-            return
-        categories, cat_err = await get_categories(token)
-        if cat_err:
+        try:
+            categories = await get_categories(token)
+        except FetchError as cat_err:
             await message.answer(cat_err)
             return
         match = next((c for c in categories if c.get("name") == value), None)
@@ -458,6 +362,18 @@ async def handle_receipt_edit_text(message: Message) -> None:
             return
         payload["category_id"] = match.get("id")
         payload["_category_name"] = match.get("name")
+    elif field == "institution":
+        try:
+            institutions = await get_institutions(token)
+        except FetchError as inst_err:
+            await message.answer(inst_err)
+            return
+        match = next((i for i in institutions if i.get("name") == value), None)
+        if not match:
+            await message.answer("Institution not found. Use exact institution name.")
+            return
+        payload["paid_account_id"] = match.get("id")
+        payload["_institution_name"] = match.get("name")
     else:
         await message.answer("Unknown field.")
         return
@@ -465,4 +381,4 @@ async def handle_receipt_edit_text(message: Message) -> None:
     payload["_awaiting_field"] = None
     await svc.state.set_pending_receipt(user.id, receipt_id, payload)
     await svc.state.set_active_receipt_edit(user.id, None)
-    await message.answer(_receipt_preview(payload), reply_markup=_receipt_keyboard(receipt_id))
+    await message.answer(receipt_preview(payload), reply_markup=receipt_keyboard(receipt_id))

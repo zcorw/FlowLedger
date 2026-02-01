@@ -229,3 +229,19 @@ class BotService:
         if resp.status_code >= 400:
             return None, f"Expense create failed: {resp.text}"
         return resp.json(), None
+    async def list_institutions(
+        self, token: str
+    ) -> Tuple[Optional[List[dict[str, Any]]], Optional[str]]:
+        if not self.client:
+            return None, "HTTP client is not ready."
+        try:
+            resp = await self.client.get(
+                "/institutions",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        except Exception as exc:
+            return None, f"Failed to fetch institutions: {exc}"
+        if resp.status_code >= 400:
+            return None, f"Failed to fetch institutions: {resp.text}"
+        data = resp.json()
+        return data.get("data", []), None
