@@ -15,11 +15,10 @@ def user_id_or_zero(user: Optional[User]) -> int:
 
 async def get_cached_token_or_reply(
     svc: Any,
-    user: Optional[User],
     reply: Callable[[str], Awaitable[Any]],
     error_prefix: str,
 ) -> Optional[str]:
-    token, err = await svc.get_cached_token(user_id_or_none(user))
+    token, err = await svc.get_cached_token()
     if not token:
         if err:
             await reply(f"{error_prefix}: {err}")

@@ -38,15 +38,13 @@ def get_service() -> BotService:
 class FetchError(Exception):
     pass
 
-async def get_categories(token: str) -> Optional[List[dict[str, Any]]]:
-    svc = get_service()
-    categories, cat_err =  await svc.list_categories(token)
+async def get_categories(svc: BotService, token: str) -> Optional[List[dict[str, Any]]]:
+    categories, cat_err = await svc.list_categories(token)
     if cat_err:
         raise FetchError(cat_err)
     return categories
 
-async def get_institutions(token: str) -> Optional[List[dict[str, Any]]]:
-    svc = get_service()
+async def get_institutions(svc: BotService, token: str) -> Optional[List[dict[str, Any]]]:
     institutions, cat_err = await svc.list_institutions(token)
     if cat_err:
         raise FetchError(cat_err)
@@ -54,22 +52,23 @@ async def get_institutions(token: str) -> Optional[List[dict[str, Any]]]:
 
 @router.message(Command("start"))
 async def handle_start(message: Message) -> None:
-    svc = get_service()
+    base_svc = get_service()
     user = message.from_user
+    svc = base_svc.with_user(user_id_or_none(user))
     text = (message.text or "").split(maxsplit=2)
     if len(text) < 3:
-        await message.answer("Usage: /start <username> <password>")
+        await message.answer("Usage: /start &lt;username&gt; &lt;password&gt;")
         return
 
     username = text[1].strip()
     password = text[2].strip()
-    user_id, err = await svc.login_and_link(user_id_or_none(user), username, password)
+    user_id, err = await base_svc.login_and_link(user_id_or_none(user), username, password)
     if not user_id:
         await message.answer(f"Unable to link your account: {err}")
         return
 
     token = await get_cached_token_or_reply(
-        svc, user, message.answer, "Unable to load preferences"
+        svc, message.answer, "Unable to load preferences"
     )
     if not token:
         return
@@ -105,10 +104,10 @@ async def handle_help(message: Message) -> None:
 
 @router.message(Command("me"))
 async def handle_me(message: Message) -> None:
-    svc = get_service()
     user = message.from_user
+    svc = get_service().with_user(user_id_or_none(user))
     token = await get_cached_token_or_reply(
-        svc, user, message.answer, "Unable to load your profile"
+        svc, message.answer, "Unable to load your profile"
     )
     if not token:
         return
@@ -133,10 +132,10 @@ async def handle_me(message: Message) -> None:
 
 @router.message(F.photo)
 async def handle_receipt_photo(message: Message) -> None:
-    svc = get_service()
     user = message.from_user
+    svc = get_service().with_user(user_id_or_none(user))
     token = await get_cached_token_or_reply(
-        svc, user, message.answer, "Unable to process receipt"
+        svc, message.answer, "Unable to process receipt"
     )
     if not token:
         return
@@ -215,11 +214,11 @@ async def handle_receipt_photo(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("receipt_confirm:"))
 async def handle_receipt_confirm(callback: CallbackQuery) -> None:
-    svc = get_service()
     user = callback.from_user
-    token, err = await svc.get_cached_token(user_id_or_none(user))
+    svc = get_service().with_user(user_id_or_none(user))
+    token, err = await svc.get_cached_token()
     if not token:
-        await callback.answer("Please /start <username> <password> first.")
+        await callback.answer("Please /start &lt;username&gt; &lt;password&gt; first.")
         return
 
     receipt_id = (callback.data or "").split(":", 1)[-1]
@@ -244,8 +243,8 @@ async def handle_receipt_confirm(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("receipt_cancel:"))
 async def handle_receipt_cancel(callback: CallbackQuery) -> None:
-    svc = get_service()
     user = callback.from_user
+    svc = get_service().with_user(user_id_or_none(user))
     receipt_id = (callback.data or "").split(":", 1)[-1]
     await svc.state.clear_pending_receipt(user_id_or_zero(user), receipt_id)
     await callback.answer("Cancelled.")
@@ -254,8 +253,8 @@ async def handle_receipt_cancel(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("receipt_edit:"))
 async def handle_receipt_edit(callback: CallbackQuery) -> None:
-    svc = get_service()
     user = callback.from_user
+    svc = get_service().with_user(user_id_or_none(user))
     parts = (callback.data or "").split(":", 2)
     if len(parts) != 3:
         await callback.answer("Invalid edit request.")
@@ -271,13 +270,13 @@ async def handle_receipt_edit(callback: CallbackQuery) -> None:
     await svc.state.set_active_receipt_edit(user_id_or_zero(user), receipt_id)
     await callback.answer()
     token = await get_cached_token_or_reply(
-        svc, user, callback.message.answer, "Missing token"
+        svc, callback.message.answer, "Missing token"
     )
     if field == "category":
         if not token:
             return
         try:
-            categories= await get_categories(token)
+            categories = await get_categories(svc, token)
         except FetchError as cat_err:
             await callback.message.answer(cat_err)
             return
@@ -289,7 +288,7 @@ async def handle_receipt_edit(callback: CallbackQuery) -> None:
         if not token:
             return
         try:
-            institutions = await get_institutions(token)
+            institutions = await get_institutions(svc, token)
         except FetchError as inst_err:
             await callback.message.answer(inst_err)
             return
@@ -303,8 +302,8 @@ async def handle_receipt_edit(callback: CallbackQuery) -> None:
 
 @router.message(F.text)
 async def handle_receipt_edit_text(message: Message) -> None:
-    svc = get_service()
     user = message.from_user
+    svc = get_service().with_user(user_id_or_none(user))
     if not user or not message.text:
         return
     if message.text.strip().startswith("/"):
@@ -326,7 +325,7 @@ async def handle_receipt_edit_text(message: Message) -> None:
 
     value = message.text.strip()
     token = await get_cached_token_or_reply(
-        svc, user, message.answer, "Missing token"
+        svc, message.answer, "Missing token"
     )
     if not token:
         return
@@ -352,7 +351,7 @@ async def handle_receipt_edit_text(message: Message) -> None:
         payload["note"] = None if value == "-" else value
     elif field == "category":
         try:
-            categories = await get_categories(token)
+            categories = await get_categories(svc, token)
         except FetchError as cat_err:
             await message.answer(cat_err)
             return
@@ -364,7 +363,7 @@ async def handle_receipt_edit_text(message: Message) -> None:
         payload["_category_name"] = match.get("name")
     elif field == "institution":
         try:
-            institutions = await get_institutions(token)
+            institutions = await get_institutions(svc, token)
         except FetchError as inst_err:
             await message.answer(inst_err)
             return

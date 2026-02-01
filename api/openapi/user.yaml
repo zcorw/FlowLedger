@@ -53,11 +53,13 @@ components:
       type: object
       properties:
         access_token: { type: string }
+        refresh_token: { type: string }
         token_type: { type: string, default: bearer }
         expires_in: { type: integer, default: 604800 }
+        refresh_expires_in: { type: integer, default: 2592000 }
         user: { $ref: '#/components/schemas/User' }
         preferences: { $ref: '#/components/schemas/UserPreference' }
-      required: [access_token, token_type, user]
+      required: [access_token, refresh_token, token_type, user]
 paths:
   /auth/register:
     post:
@@ -116,6 +118,30 @@ paths:
         '401':
           description: 登录失败
           content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /auth/refresh:
+    post:
+      tags: [user]
+      summary: ??????
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token: { type: string }
+              required: [refresh_token]
+      responses:
+        '200':
+          description: ????
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '401':
+          description: refresh token ?????
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
   /auth/verify-email:
     get:
       tags: [user]

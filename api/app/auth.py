@@ -17,6 +17,7 @@ AUTH_SECRET = os.getenv("AUTH_SECRET", "DEV_ONLY_SECRET")
 if AUTH_ROTATE_ON_STARTUP:
     AUTH_SECRET = secrets.token_hex(32)
 AUTH_TOKEN_TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", "604800"))  # 7 days
+AUTH_REFRESH_TOKEN_TTL_SECONDS = int(os.getenv("AUTH_REFRESH_TOKEN_TTL_SECONDS", "2592000"))  # 30 days
 PASSWORD_HASH_ITERATIONS = int(os.getenv("PASSWORD_HASH_ITERATIONS", "200_000"))
 PASSWORD_MIN_LENGTH = 8
 
@@ -61,6 +62,15 @@ def generate_access_token(user_id: int) -> str:
     return f"{payload}:{sig}"
 
 
+def generate_refresh_token(user_id: int) -> str:
+    now = int(time.time())
+    expires_at = now + AUTH_REFRESH_TOKEN_TTL_SECONDS
+    payload = f"r:{user_id}:{expires_at}"
+    secret = _ensure_secret().encode("utf-8")
+    sig = hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{payload}:{sig}"
+
+
 def _parse_token(token: str) -> tuple[int, int, str]:
     parts = token.split(":")
     if len(parts) != 3:
@@ -71,10 +81,33 @@ def _parse_token(token: str) -> tuple[int, int, str]:
     return user_id, expires_at, sig
 
 
+def _parse_refresh_token(token: str) -> tuple[int, int, str]:
+    parts = token.split(":")
+    if len(parts) != 4 or parts[0] != "r":
+        raise ValueError("invalid_refresh_token_format")
+    user_id = int(parts[1])
+    expires_at = int(parts[2])
+    sig = parts[3]
+    return user_id, expires_at, sig
+
+
 def _verify_signature(payload: str, signature: str) -> bool:
     secret = _ensure_secret().encode("utf-8")
     expected_sig = hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected_sig, signature)
+
+
+def resolve_refresh_user_id(refresh_token: str) -> int:
+    try:
+        user_id, expires_at, sig = _parse_refresh_token(refresh_token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="invalid_refresh_token")
+    payload = f"r:{user_id}:{expires_at}"
+    if not _verify_signature(payload, sig):
+        raise HTTPException(status_code=401, detail="invalid_refresh_token_signature")
+    if expires_at < int(time.time()):
+        raise HTTPException(status_code=401, detail="refresh_token_expired")
+    return user_id
 
 
 def resolve_user_id(

@@ -15,9 +15,12 @@ from ..db import SessionLocal
 from ..models import Currency, User, UserPreference
 from ..auth import (
     AUTH_TOKEN_TTL_SECONDS,
+    AUTH_REFRESH_TOKEN_TTL_SECONDS,
     PASSWORD_MIN_LENGTH,
+    generate_refresh_token,
     hash_password,
     resolve_user_id,
+    resolve_refresh_user_id,
     verify_password,
 )
 from ..auth import generate_access_token
@@ -128,10 +131,16 @@ class AuthLoginPayload(BaseModel):
 
 class AuthResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
     expires_in: int = AUTH_TOKEN_TTL_SECONDS
+    refresh_expires_in: int = AUTH_REFRESH_TOKEN_TTL_SECONDS
     user: UserOut
     preferences: PreferenceOut
+
+
+class AuthRefreshPayload(BaseModel):
+    refresh_token: str = Field(..., min_length=16)
 
 
 def get_current_user(
@@ -278,8 +287,10 @@ def _ensure_registration_capacity(db: Session):
 
 def _issue_auth_response(user: User, pref: UserPreference) -> dict:
     token = generate_access_token(user.id)
+    refresh_token = generate_refresh_token(user.id)
     return AuthResponse(
         access_token=token,
+        refresh_token=refresh_token,
         user=user,
         preferences=pref,
     ).model_dump()
@@ -363,6 +374,19 @@ def auth_login(
     user.last_login_at = _now()
     db.commit()
     db.refresh(user)
+    pref = _ensure_preference(user, db)
+    return _issue_auth_response(user, pref)
+
+
+@router.post("/auth/refresh", response_model=AuthResponse)
+def auth_refresh(
+    payload: AuthRefreshPayload,
+    db: Session = Depends(get_db),
+):
+    user_id = resolve_refresh_user_id(payload.refresh_token)
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="user_not_found")
     pref = _ensure_preference(user, db)
     return _issue_auth_response(user, pref)
 
