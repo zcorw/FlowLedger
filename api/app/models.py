@@ -14,6 +14,7 @@ from sqlalchemy import (
     Boolean,
     ForeignKey,
     UniqueConstraint,
+    JSON,
 )
 from sqlalchemy import Index
 from sqlalchemy.orm import Mapped, mapped_column
@@ -166,6 +167,110 @@ class Expense(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     note: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SchedulerJob(Base):
+    __tablename__ = "jobs"
+    __table_args__ = (
+        CheckConstraint("status IN ('active','paused','archived')", name="ck_jobs__status"),
+        CheckConstraint("advance_minutes BETWEEN 0 AND 10080", name="ck_jobs__advance"),
+        Index("idx_jobs__user_id", "user_id"),
+        {"schema": "scheduler"},
+    )
+
+    _id_type = BigInteger().with_variant(Integer, "sqlite")
+
+    id: Mapped[int] = mapped_column(_id_type, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        _id_type,
+        ForeignKey("user.users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str | None] = mapped_column(String, nullable=True)
+    rule: Mapped[str] = mapped_column(String, nullable=False)
+    first_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    advance_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    channel: Mapped[str] = mapped_column(String, nullable=False, default="telegram")
+    status: Mapped[str] = mapped_column(String, nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SchedulerJobRun(Base):
+    __tablename__ = "job_runs"
+    __table_args__ = (
+        UniqueConstraint("job_id", "period_key", name="uq_job_runs__job_period"),
+        CheckConstraint(
+            "status IN ('pending','sent','confirmed','skipped','snoozed','cancelled')",
+            name="ck_job_runs__status",
+        ),
+        Index("idx_job_runs__job_scheduled", "job_id", "scheduled_at"),
+        {"schema": "scheduler"},
+    )
+
+    _id_type = BigInteger().with_variant(Integer, "sqlite")
+
+    id: Mapped[int] = mapped_column(_id_type, primary_key=True, autoincrement=True)
+    job_id: Mapped[int] = mapped_column(
+        _id_type,
+        ForeignKey("scheduler.jobs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    period_key: Mapped[str] = mapped_column(String, nullable=False)
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SchedulerReminder(Base):
+    __tablename__ = "reminders"
+    __table_args__ = (
+        {"schema": "scheduler"},
+    )
+
+    _id_type = BigInteger().with_variant(Integer, "sqlite")
+
+    id: Mapped[int] = mapped_column(_id_type, primary_key=True, autoincrement=True)
+    job_run_id: Mapped[int] = mapped_column(
+        _id_type,
+        ForeignKey("scheduler.job_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SchedulerConfirmation(Base):
+    __tablename__ = "confirmations"
+    __table_args__ = (
+        UniqueConstraint("job_run_id", "idempotency_key", name="uq_confirmations__run_idem"),
+        CheckConstraint(
+            "action IN ('complete','skip','snooze','cancel')",
+            name="ck_confirmations__action",
+        ),
+        Index("idx_confirmations__run_confirmed", "job_run_id", "confirmed_at"),
+        {"schema": "scheduler"},
+    )
+
+    _id_type = BigInteger().with_variant(Integer, "sqlite")
+
+    id: Mapped[int] = mapped_column(_id_type, primary_key=True, autoincrement=True)
+    job_run_id: Mapped[int] = mapped_column(
+        _id_type,
+        ForeignKey("scheduler.job_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String, nullable=False)
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

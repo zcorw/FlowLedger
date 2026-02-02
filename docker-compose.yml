@@ -120,6 +120,9 @@ services:
       API_BASE_URL: ${API_BASE_URL:-http://api:8000/v1}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       BOT_STATE_PATH: ${BOT_STATE_PATH:-/app/data/bot_state.json}
+      BOT_INTERNAL_HOST: ${BOT_INTERNAL_HOST:-127.0.0.1}
+      BOT_INTERNAL_PORT: ${BOT_INTERNAL_PORT:-7090}
+      BOT_INTERNAL_TOKEN: ${BOT_INTERNAL_TOKEN:-}
     ports:
       - "${BOT_PORT:-9080}:7000"
     restart: unless-stopped
@@ -143,6 +146,11 @@ services:
       FX_CRON_SCHEDULE: ${FX_CRON_SCHEDULE:-0 9 * * *}
       FX_TIMEOUT_SECONDS: ${FX_TIMEOUT_SECONDS:-10}
       FX_SYNC_ON_START: ${FX_SYNC_ON_START:-false}
+      SCHEDULER_SCAN_CRON: ${SCHEDULER_SCAN_CRON:-*/1 * * * *}
+      SCHEDULER_BATCH_SIZE: ${SCHEDULER_BATCH_SIZE:-100}
+      BOT_INTERNAL_URL: ${BOT_INTERNAL_URL:-http://bot:7090}
+      BOT_INTERNAL_TOKEN: ${BOT_INTERNAL_TOKEN:-}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-flow_ledger}:${POSTGRES_PASSWORD:-flow_ledger}@db:5432/${POSTGRES_DB:-flow_ledger}}
     command: python -m app.tasks.scheduler_service
     volumes:
       - ./api:/app

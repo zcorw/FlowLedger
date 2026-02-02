@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 
 from config import Config, build_config
 from handlers import router, set_service
+from notify_server import start_internal_server
 from service import BotService
 
 
@@ -64,6 +65,7 @@ async def main() -> None:
     service = BotService(config)
     set_service(service)
     await service.start()
+    internal_runner = await start_internal_server(bot, config)
 
     try:
         if config.webhook_url:
@@ -73,6 +75,7 @@ async def main() -> None:
     except asyncio.CancelledError:
         pass
     finally:
+        await internal_runner.cleanup()
         await service.close()
         await bot.session.close()
 
