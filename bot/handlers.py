@@ -19,6 +19,7 @@ from handler_utils import (
     user_id_or_none,
     user_id_or_zero,
 )
+from text_ocr import TextOcrError, recognize_receipt_text
 
 
 router = Router()
@@ -306,11 +307,68 @@ async def handle_receipt_edit_text(message: Message) -> None:
     svc = get_service().with_user(user_id_or_none(user))
     if not user or not message.text:
         return
-    if message.text.strip().startswith("/"):
+    text = message.text.strip()
+    if text.startswith("/"):
         return
 
     receipt_id = await svc.state.get_active_receipt_edit(user.id)
     if not receipt_id:
+        token = await get_cached_token_or_reply(
+            svc, message.answer, "Unable to process receipt text"
+        )
+        if not token:
+            return
+
+        await message.answer("Text received. Running OCR, please wait...")
+
+        async def _process_text() -> None:
+            categories: List[dict[str, Any]] = []
+            try:
+                categories = await get_categories(svc, token) or []
+            except FetchError as cat_err:
+                await message.answer(cat_err)
+
+            try:
+                result = await recognize_receipt_text(
+                    text, [c.get("name") for c in categories if c.get("name")]
+                )
+            except TextOcrError:
+                await message.answer("Text OCR failed. Please try again.")
+                return
+            except Exception as exc:
+                await message.answer(f"Text OCR failed: {exc}")
+                return
+
+            fields = extract_ocr_fields(result)
+            prefs, _ = await svc.fetch_preferences(token)
+            currency = fields.get("currency") or (prefs or {}).get("base_currency")
+            category_id = None
+            if categories and fields.get("type"):
+                for cat in categories:
+                    if cat.get("name") == fields.get("type"):
+                        category_id = cat.get("id")
+                        break
+
+            receipt_id_local = str(uuid4())
+            payload = {
+                "name": fields.get("name") or "Receipt expense",
+                "amount": fields.get("amount"),
+                "currency": currency or "USD",
+                "category_id": category_id,
+                "merchant": fields.get("merchant"),
+                "occurred_at": fields.get("occurred_at"),
+                "note": "Imported from text OCR",
+                "_category_name": fields.get("type"),
+                "_institution_name": fields.get("institution"),
+            }
+            await svc.state.set_pending_receipt(
+                user_id_or_zero(user), receipt_id_local, payload
+            )
+            await message.answer(
+                receipt_preview(payload), reply_markup=receipt_keyboard(receipt_id_local)
+            )
+
+        asyncio.create_task(_process_text())
         return
 
     payload = await svc.state.get_pending_receipt(user.id, receipt_id)
