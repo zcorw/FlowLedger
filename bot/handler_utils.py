@@ -38,6 +38,7 @@ def extract_ocr_fields(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "name": pick("name", "消费名称"),
         "amount": pick("amount", "消费金额"),
+        "currency": pick("currency", "币种"),
         "type": pick("type", "消费分类"),
         "institution": pick("institution", "消费账户"),
         "merchant": pick("merchant", "消费商家名称"),

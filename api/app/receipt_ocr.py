@@ -62,6 +62,9 @@ def recognize_receipt(image_path: Path, categories: List[str]) -> Dict[str, Any]
         "- If information is unclear, infer the most reasonable value from the receipt context."
         "- Do not invent merchants, prices, or dates not supported by the receipt."
         "- amount must be the final total actually paid by the customer."
+        "- currency must be an ISO 4217 code (e.g., CNY, JPY, USD)."
+        "- If the receipt has an explicit currency unit, use it."
+        "- If the currency symbol is ambiguous (e.g., ￥ shared by CNY/JPY), infer by the receipt language."
         "- occurred_at must be ISO 8601 format. Include timezone if the receipt implies one."
         "- type MUST be selected from the provided type options."
         "- name must be a concise, human-readable summary of the entire purchase."
@@ -74,11 +77,12 @@ def recognize_receipt(image_path: Path, categories: List[str]) -> Dict[str, Any]
         "properties": {
             "name": {"type": "string"},
             "amount": {"type": "number"},
+            "currency": {"type": "string"},
             "type": {"type": "string"},
             "merchant": {"type": "string"},
             "occurred_at": {"type": "string"},
         },
-        "required": ["name", "amount", "type", "merchant", "occurred_at"],
+        "required": ["name", "amount", "currency", "type", "merchant", "occurred_at"],
     }
 
     payload = {
@@ -121,6 +125,7 @@ def recognize_receipt(image_path: Path, categories: List[str]) -> Dict[str, Any]
         raise ReceiptOcrError("openai_response_missing_text")
     try:
         result = json.loads(text)
+        print(result)
     except json.JSONDecodeError as exc:
         raise ReceiptOcrError("openai_response_invalid_json") from exc
     if not isinstance(result, dict):

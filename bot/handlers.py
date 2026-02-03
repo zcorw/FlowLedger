@@ -176,7 +176,7 @@ async def handle_receipt_photo(message: Message) -> None:
                 result = task.get("result") or {}
                 fields = extract_ocr_fields(result)
                 prefs, _ = await svc.fetch_preferences(token)
-                currency = (prefs or {}).get("base_currency")
+                currency = fields.get("currency") or (prefs or {}).get("base_currency")
                 categories, _ = await svc.list_categories(token)
                 category_id = None
                 if categories and fields.get("type"):
