@@ -32,6 +32,11 @@ components:
     From: { in: query, name: from, schema: { type: string, format: date-time } }
     To: { in: query, name: to, schema: { type: string, format: date-time } }
   schemas:
+    ReceiptTextIn:
+      type: object
+      properties:
+        text: { type: string }
+      required: [text]
     Expense:
       type: object
       properties:
@@ -246,6 +251,53 @@ paths:
     get:
       tags: [expense]
       summary: Get receipt OCR task result
+      parameters:
+        - in: path
+          name: task_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id: { type: string }
+                  kind: { type: string }
+                  status: { type: string }
+                  progress: { type: integer }
+                  stage: { type: string, nullable: true }
+                  filename: { type: string, nullable: true }
+                  size: { type: integer, nullable: true }
+                  result: { $ref: '#/components/schemas/ReceiptOcrResult' }
+                  error: { type: string, nullable: true }
+                  created_at: { type: string, format: date-time }
+                  updated_at: { type: string, format: date-time }
+  /import/expense/receipt-text:
+    post:
+      tags: [expense]
+      summary: Upload receipt text for OCR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReceiptTextIn' }
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id: { type: string }
+                  file_id: { type: integer, format: int64, nullable: true }
+  /import/expense/receipt-text/tasks/{task_id}:
+    get:
+      tags: [expense]
+      summary: Get receipt text OCR task result
       parameters:
         - in: path
           name: task_id

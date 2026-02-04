@@ -19,7 +19,6 @@ from handler_utils import (
     user_id_or_none,
     user_id_or_zero,
 )
-from text_ocr import TextOcrError, recognize_receipt_text
 
 
 router = Router()
@@ -322,51 +321,60 @@ async def handle_receipt_edit_text(message: Message) -> None:
         await message.answer("Text received. Running OCR, please wait...")
 
         async def _process_text() -> None:
-            categories: List[dict[str, Any]] = []
-            try:
-                categories = await get_categories(svc, token) or []
-            except FetchError as cat_err:
-                await message.answer(cat_err)
-
-            try:
-                result = await recognize_receipt_text(
-                    text, [c.get("name") for c in categories if c.get("name")]
-                )
-            except TextOcrError:
-                await message.answer("Text OCR failed. Please try again.")
-                return
-            except Exception as exc:
-                await message.answer(f"Text OCR failed: {exc}")
+            upload_resp, upload_err = await svc.upload_receipt_text(token, text)
+            if not upload_resp:
+                await message.answer(upload_err or "Text OCR upload failed.")
                 return
 
-            fields = extract_ocr_fields(result)
-            prefs, _ = await svc.fetch_preferences(token)
-            currency = fields.get("currency") or (prefs or {}).get("base_currency")
-            category_id = None
-            if categories and fields.get("type"):
-                for cat in categories:
-                    if cat.get("name") == fields.get("type"):
-                        category_id = cat.get("id")
-                        break
+            task_id = upload_resp.get("task_id")
+            if not task_id:
+                await message.answer("Text OCR upload succeeded but task_id is missing.")
+                return
 
-            receipt_id_local = str(uuid4())
-            payload = {
-                "name": fields.get("name") or "Receipt expense",
-                "amount": fields.get("amount"),
-                "currency": currency or "USD",
-                "category_id": category_id,
-                "merchant": fields.get("merchant"),
-                "occurred_at": fields.get("occurred_at"),
-                "note": "Imported from text OCR",
-                "_category_name": fields.get("type"),
-                "_institution_name": fields.get("institution"),
-            }
-            await svc.state.set_pending_receipt(
-                user_id_or_zero(user), receipt_id_local, payload
-            )
-            await message.answer(
-                receipt_preview(payload), reply_markup=receipt_keyboard(receipt_id_local)
-            )
+            for _ in range(15):
+                task, task_err = await svc.fetch_receipt_text_task(token, task_id)
+                if not task:
+                    await message.answer(task_err or "Failed to fetch text OCR result.")
+                    return
+                if task.get("status") == "succeeded":
+                    result = task.get("result") or {}
+                    fields = extract_ocr_fields(result)
+                    prefs, _ = await svc.fetch_preferences(token)
+                    currency = fields.get("currency") or (prefs or {}).get("base_currency")
+                    categories, _ = await svc.list_categories(token)
+                    category_id = None
+                    if categories and fields.get("type"):
+                        for cat in categories:
+                            if cat.get("name") == fields.get("type"):
+                                category_id = cat.get("id")
+                                break
+
+                    receipt_id_local = str(uuid4())
+                    payload = {
+                        "name": fields.get("name") or "Receipt expense",
+                        "amount": fields.get("amount"),
+                        "currency": currency or "USD",
+                        "category_id": category_id,
+                        "merchant": fields.get("merchant"),
+                        "occurred_at": fields.get("occurred_at"),
+                        "note": "Imported from text OCR",
+                        "_category_name": fields.get("type"),
+                        "_institution_name": fields.get("institution"),
+                    }
+                    await svc.state.set_pending_receipt(
+                        user_id_or_zero(user), receipt_id_local, payload
+                    )
+                    await message.answer(
+                        receipt_preview(payload),
+                        reply_markup=receipt_keyboard(receipt_id_local),
+                    )
+                    return
+                if task.get("status") == "failed":
+                    await message.answer("Text OCR failed. Please try again.")
+                    return
+                await asyncio.sleep(2)
+
+            await message.answer("Text OCR is taking too long. Please try again later.")
 
         asyncio.create_task(_process_text())
         return

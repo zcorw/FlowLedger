@@ -16,7 +16,7 @@ from ..auth import resolve_user_id
 from ..db import SessionLocal
 from ..import_tasks import create_task, get_task, save_upload_file, update_task
 from ..models import Currency, Expense, ExpenseCategory, FileAsset, User
-from ..receipt_ocr import ReceiptOcrError, recognize_receipt
+from ..receipt_ocr import ReceiptOcrError, recognize_receipt, recognize_receipt_text
 from ..schemas.import_task import ImportTaskCreateResponse, ImportTaskStatus
 
 router = APIRouter(prefix="/v1", tags=["expense"])
@@ -73,6 +73,41 @@ def _process_receipt_ocr_task(task_id: str, file_path: str, user_id: int) -> Non
 
         update_task(task_id, stage="recognizing", progress=30)
         result = recognize_receipt(Path(file_path), category_names)
+        update_task(
+            task_id,
+            status="succeeded",
+            stage="completed",
+            progress=100,
+            result=result,
+        )
+    except ReceiptOcrError as exc:
+        update_task(task_id, status="failed", stage="failed", error=str(exc))
+    except Exception:
+        update_task(task_id, status="failed", stage="failed", error="receipt_ocr_failed")
+    finally:
+        db.close()
+
+
+def _process_receipt_text_ocr_task(task_id: str, receipt_text: str, user_id: int) -> None:
+    update_task(task_id, status="processing", stage="loading_categories", progress=10)
+    db = SessionLocal()
+    try:
+        user = db.get(User, user_id)
+        if not user:
+            update_task(task_id, status="failed", stage="failed", error="user_not_found")
+            return
+        categories = (
+            db.query(ExpenseCategory)
+            .filter(ExpenseCategory.user_id == user.id)
+            .order_by(ExpenseCategory.id.asc())
+            .all()
+        )
+        category_names = [c.name for c in categories]
+        if not category_names:
+            category_names = ["other"]
+
+        update_task(task_id, stage="recognizing", progress=30)
+        result = recognize_receipt_text(receipt_text, category_names)
         update_task(
             task_id,
             status="succeeded",
@@ -619,6 +654,43 @@ def upload_receipt(
     return ImportTaskCreateResponse(task_id=task_id, file_id=file_meta.id)
 
 
+class ReceiptTextIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4000)
+
+    @validator("text")
+    def _strip_text(cls, v: str):
+        text = v.strip()
+        if not text:
+            raise ValueError("empty_text")
+        return text
+
+
+@router.post(
+    "/import/expense/receipt-text",
+    status_code=202,
+    response_model=ImportTaskCreateResponse,
+)
+def upload_receipt_text(
+    payload: ReceiptTextIn,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+):
+    text_bytes = payload.text.encode("utf-8")
+    task_id = create_task(
+        "expense_receipt_text_ocr",
+        filename="receipt_text.txt",
+        size=len(text_bytes),
+        owner_id=current_user.id,
+    )
+    background_tasks.add_task(
+        _process_receipt_text_ocr_task,
+        task_id,
+        payload.text,
+        current_user.id,
+    )
+    return ImportTaskCreateResponse(task_id=task_id, file_id=None)
+
+
 @router.get(
     "/import/expense/receipt/tasks/{task_id}",
     response_model=ImportTaskStatus,
@@ -626,6 +698,19 @@ def upload_receipt(
 def get_receipt_task(task_id: str, current_user: User = Depends(get_current_user)):
     task = get_task(task_id)
     if not task or task.get("kind") != "expense_receipt_ocr":
+        raise HTTPException(status_code=404, detail="task_not_found")
+    if task.get("owner_id") != current_user.id:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    return _public_task(task)
+
+
+@router.get(
+    "/import/expense/receipt-text/tasks/{task_id}",
+    response_model=ImportTaskStatus,
+)
+def get_receipt_text_task(task_id: str, current_user: User = Depends(get_current_user)):
+    task = get_task(task_id)
+    if not task or task.get("kind") != "expense_receipt_text_ocr":
         raise HTTPException(status_code=404, detail="task_not_found")
     if task.get("owner_id") != current_user.id:
         raise HTTPException(status_code=404, detail="task_not_found")

@@ -316,6 +316,41 @@ class BotService:
             return None, f"Receipt upload failed: {resp.text}"
         return resp.json(), None
 
+    async def upload_receipt_text(
+        self,
+        token: str,
+        text: str,
+        telegram_user_id: Optional[int] = None,
+    ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
+        if not self.client:
+            return None, "HTTP client is not ready."
+        try:
+            resp = await self.client.post(
+                "/import/expense/receipt-text",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"text": text},
+            )
+        except Exception as exc:
+            return None, f"Failed to upload receipt text: {exc}"
+        if resp.status_code == 401:
+            refreshed, refresh_err = await self._refresh_access_token(telegram_user_id)
+            if not refreshed:
+                return None, refresh_err
+            try:
+                resp = await self.client.post(
+                    "/import/expense/receipt-text",
+                    headers={"Authorization": f"Bearer {refreshed}"},
+                    json={"text": text},
+                )
+            except Exception as exc:
+                return None, f"Failed to upload receipt text: {exc}"
+            if resp.status_code == 401:
+                await self._handle_unauthorized(telegram_user_id)
+                return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
+        if resp.status_code >= 400:
+            return None, f"Receipt text upload failed: {resp.text}"
+        return resp.json(), None
+
     async def fetch_receipt_task(
         self, token: str, task_id: str, telegram_user_id: Optional[int] = None
     ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
@@ -344,6 +379,36 @@ class BotService:
                 return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
         if resp.status_code >= 400:
             return None, f"Failed to fetch receipt task: {resp.text}"
+        return resp.json(), None
+
+    async def fetch_receipt_text_task(
+        self, token: str, task_id: str, telegram_user_id: Optional[int] = None
+    ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
+        if not self.client:
+            return None, "HTTP client is not ready."
+        try:
+            resp = await self.client.get(
+                f"/import/expense/receipt-text/tasks/{task_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        except Exception as exc:
+            return None, f"Failed to fetch receipt text task: {exc}"
+        if resp.status_code == 401:
+            refreshed, refresh_err = await self._refresh_access_token(telegram_user_id)
+            if not refreshed:
+                return None, refresh_err
+            try:
+                resp = await self.client.get(
+                    f"/import/expense/receipt-text/tasks/{task_id}",
+                    headers={"Authorization": f"Bearer {refreshed}"},
+                )
+            except Exception as exc:
+                return None, f"Failed to fetch receipt text task: {exc}"
+            if resp.status_code == 401:
+                await self._handle_unauthorized(telegram_user_id)
+                return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
+        if resp.status_code >= 400:
+            return None, f"Failed to fetch receipt text task: {resp.text}"
         return resp.json(), None
 
     async def list_categories(
@@ -495,10 +560,22 @@ class UserScopedBotService:
             token, filename, content_type, content, self._telegram_user_id
         )
 
+    async def upload_receipt_text(
+        self, token: str, text: str
+    ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
+        return await self._base.upload_receipt_text(token, text, self._telegram_user_id)
+
     async def fetch_receipt_task(
         self, token: str, task_id: str
     ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
         return await self._base.fetch_receipt_task(token, task_id, self._telegram_user_id)
+
+    async def fetch_receipt_text_task(
+        self, token: str, task_id: str
+    ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
+        return await self._base.fetch_receipt_text_task(
+            token, task_id, self._telegram_user_id
+        )
 
     async def list_categories(
         self, token: str
