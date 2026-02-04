@@ -16,6 +16,16 @@ class ReceiptOcrError(RuntimeError):
     pass
 
 
+def _load_openai_settings() -> tuple[str, str, str, float]:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ReceiptOcrError("missing_openai_api_key")
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    api_url = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/responses")
+    timeout_seconds = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "20"))
+    return api_key, model, api_url, timeout_seconds
+
+
 def _guess_mime_type(path: Path) -> str:
     suffix = path.suffix.lower()
     if suffix in {".jpg", ".jpeg"}:
@@ -40,38 +50,8 @@ def _extract_output_text(payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def recognize_receipt(image_path: Path, categories: List[str]) -> Dict[str, Any]:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ReceiptOcrError("missing_openai_api_key")
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    api_url = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/responses")
-    timeout_seconds = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "20"))
-
-    mime_type = _guess_mime_type(image_path)
-    image_b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
-    category_list = ", ".join(categories) if categories else "其他"
-
-    prompt = (
-        "You are a receipt summarization engine."
-
-        "Hard constraints (must follow):"
-        "- Output ONLY valid JSON. No markdown, no explanations."
-        "- Produce EXACTLY ONE summary record."
-        "- ALL fields are REQUIRED. Do NOT output null or empty values."
-        "- If information is unclear, infer the most reasonable value from the receipt context."
-        "- Do not invent merchants, prices, or dates not supported by the receipt."
-        "- amount must be the final total actually paid by the customer."
-        "- currency must be an ISO 4217 code (e.g., CNY, JPY, USD)."
-        "- If the receipt has an explicit currency unit, use it."
-        "- If the currency symbol is ambiguous (e.g., ￥ shared by CNY/JPY), infer by the receipt language."
-        "- occurred_at must be ISO 8601 format. Include timezone if the receipt implies one."
-        "- type MUST be selected from the provided type options."
-        "- name must be a concise, human-readable summary of the entire purchase."
-        f"type must be one of: {category_list}."
-    )
-
-    schema = {
+def _receipt_schema() -> Dict[str, Any]:
+    return {
         "type": "object",
         "additionalProperties": False,
         "properties": {
@@ -84,6 +64,66 @@ def recognize_receipt(image_path: Path, categories: List[str]) -> Dict[str, Any]
         },
         "required": ["name", "amount", "currency", "type", "merchant", "occurred_at"],
     }
+
+
+def _receipt_prompt(category_list: str, *, receipt_text: Optional[str] = None) -> str:
+    prompt = (
+        "You are a receipt summarization engine."
+        "Hard constraints (must follow):"
+        "- Output ONLY valid JSON. No markdown, no explanations."
+        "- Produce EXACTLY ONE summary record."
+        "- ALL fields are REQUIRED. Do NOT output null or empty values."
+        "- If information is unclear, infer the most reasonable value from the receipt context."
+        "- Do not invent merchants, prices, or dates not supported by the receipt."
+        "- amount must be the final total actually paid by the customer."
+        "- currency must be an ISO 4217 code (e.g., CNY, JPY, USD)."
+        "- If the receipt has an explicit currency unit, use it."
+        "- If the currency symbol is ambiguous, infer by the receipt language."
+        "- occurred_at must be ISO 8601 format. Include timezone if the receipt implies one."
+        "- name must be a concise, human-readable summary of the entire purchase."
+        f"type must be one of: {category_list}."
+    )
+    if receipt_text is not None:
+        prompt = f"{prompt}\nReceipt text:\n{receipt_text}"
+    return prompt
+
+
+def _post_openai(payload: Dict[str, Any]) -> Dict[str, Any]:
+    api_key, _, api_url, timeout_seconds = _load_openai_settings()
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    with httpx.Client(timeout=timeout_seconds) as client:
+        resp = client.post(api_url, json=payload, headers=headers)
+        if resp.status_code >= 400:
+            logger.error(
+                "OpenAI request failed: status=%s body=%s",
+                resp.status_code,
+                resp.text[:2000],
+            )
+            raise ReceiptOcrError("openai_request_failed")
+        return resp.json()
+
+
+def _parse_ocr_response(data: Dict[str, Any]) -> Dict[str, Any]:
+    output_text = _extract_output_text(data)
+    if not output_text:
+        raise ReceiptOcrError("openai_response_missing_text")
+    try:
+        result = json.loads(output_text)
+    except json.JSONDecodeError as exc:
+        raise ReceiptOcrError("openai_response_invalid_json") from exc
+    if not isinstance(result, dict):
+        raise ReceiptOcrError("openai_response_invalid_payload")
+    return result
+
+
+def recognize_receipt(image_path: Path, categories: List[str]) -> Dict[str, Any]:
+    _, model, _, _ = _load_openai_settings()
+
+    mime_type = _guess_mime_type(image_path)
+    image_b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    category_list = ", ".join(categories) if categories else "other"
+    prompt = _receipt_prompt(category_list)
+    schema = _receipt_schema()
 
     payload = {
         "model": model,
@@ -108,73 +148,16 @@ def recognize_receipt(image_path: Path, categories: List[str]) -> Dict[str, Any]
         },
     }
 
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    with httpx.Client(timeout=timeout_seconds) as client:
-        resp = client.post(api_url, json=payload, headers=headers)
-        if resp.status_code >= 400:
-            logger.error(
-                "OpenAI request failed: status=%s body=%s",
-                resp.status_code,
-                resp.text[:2000],
-            )
-            raise ReceiptOcrError("openai_request_failed")
-        data = resp.json()
-
-    text = _extract_output_text(data)
-    if not text:
-        raise ReceiptOcrError("openai_response_missing_text")
-    try:
-        result = json.loads(text)
-        print(result)
-    except json.JSONDecodeError as exc:
-        raise ReceiptOcrError("openai_response_invalid_json") from exc
-    if not isinstance(result, dict):
-        raise ReceiptOcrError("openai_response_invalid_payload")
-    return result
+    data = _post_openai(payload)
+    return _parse_ocr_response(data)
 
 
 def recognize_receipt_text(text: str, categories: List[str]) -> Dict[str, Any]:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ReceiptOcrError("missing_openai_api_key")
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    api_url = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/responses")
-    timeout_seconds = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "20"))
+    _, model, _, _ = _load_openai_settings()
 
     category_list = ", ".join(categories) if categories else "other"
-
-    prompt = (
-        "You are a receipt summarization engine."
-        "Hard constraints (must follow):"
-        "- Output ONLY valid JSON. No markdown, no explanations."
-        "- Produce EXACTLY ONE summary record."
-        "- ALL fields are REQUIRED. Do NOT output null or empty values."
-        "- If information is unclear, infer the most reasonable value from the receipt context."
-        "- Do not invent merchants, prices, or dates not supported by the receipt."
-        "- amount must be the final total actually paid by the customer."
-        "- currency must be an ISO 4217 code (e.g., CNY, JPY, USD)."
-        "- If the receipt has an explicit currency unit, use it."
-        "- If the currency symbol is ambiguous, infer by the receipt language."
-        "- occurred_at must be ISO 8601 format. Include timezone if the receipt implies one."
-        "- name must be a concise, human-readable summary of the entire purchase."
-        f"type must be one of: {category_list}."
-        "\nReceipt text:\n"
-        f"{text}"
-    )
-
-    schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "name": {"type": "string"},
-            "amount": {"type": "number"},
-            "currency": {"type": "string"},
-            "type": {"type": "string"},
-            "merchant": {"type": "string"},
-            "occurred_at": {"type": "string"},
-        },
-        "required": ["name", "amount", "currency", "type", "merchant", "occurred_at"],
-    }
+    prompt = _receipt_prompt(category_list, receipt_text=text)
+    schema = _receipt_schema()
 
     payload = {
         "model": model,
@@ -195,25 +178,5 @@ def recognize_receipt_text(text: str, categories: List[str]) -> Dict[str, Any]:
         },
     }
 
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    with httpx.Client(timeout=timeout_seconds) as client:
-        resp = client.post(api_url, json=payload, headers=headers)
-        if resp.status_code >= 400:
-            logger.error(
-                "OpenAI request failed: status=%s body=%s",
-                resp.status_code,
-                resp.text[:2000],
-            )
-            raise ReceiptOcrError("openai_request_failed")
-        data = resp.json()
-
-    output_text = _extract_output_text(data)
-    if not output_text:
-        raise ReceiptOcrError("openai_response_missing_text")
-    try:
-        result = json.loads(output_text)
-    except json.JSONDecodeError as exc:
-        raise ReceiptOcrError("openai_response_invalid_json") from exc
-    if not isinstance(result, dict):
-        raise ReceiptOcrError("openai_response_invalid_payload")
-    return result
+    data = _post_openai(payload)
+    return _parse_ocr_response(data)
