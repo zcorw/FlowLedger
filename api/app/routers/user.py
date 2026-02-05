@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Header
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy.orm import Session
 
@@ -16,11 +16,14 @@ from ..models import Currency, User, UserPreference
 from ..auth import (
     AUTH_TOKEN_TTL_SECONDS,
     AUTH_REFRESH_TOKEN_TTL_SECONDS,
+    BOT_LOGIN_TOKEN_MIN_LENGTH,
     PASSWORD_MIN_LENGTH,
     generate_refresh_token,
+    hash_login_token,
     hash_password,
     resolve_user_id,
     resolve_refresh_user_id,
+    verify_login_token,
     verify_password,
 )
 from ..auth import generate_access_token
@@ -32,6 +35,7 @@ router = APIRouter(prefix="/v1", tags=["user"])
 DEFAULT_BASE_CURRENCY = os.getenv("DEFAULT_CURRENCY", "USD").upper()
 DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE", "UTC")
 DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANG", "zh-CN")
+BOT_INTERNAL_TOKEN = os.getenv("BOT_INTERNAL_TOKEN", "").strip()
 EMAIL_VERIFICATION_TOKEN_TTL_SECONDS = int(os.getenv("EMAIL_VERIFICATION_TOKEN_TTL_SECONDS", "86400"))
 EMAIL_VERIFICATION_ENABLED = os.getenv("EMAIL_VERIFICATION_ENABLED", "true").lower() == "true"
 REGISTRATION_DAILY_LIMIT_NO_EMAIL = int(os.getenv("REGISTRATION_DAILY_LIMIT_NO_EMAIL", "50"))
@@ -127,6 +131,15 @@ class AuthRegisterPayload(BaseModel):
 class AuthLoginPayload(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
     password: str = Field(..., min_length=PASSWORD_MIN_LENGTH, max_length=128)
+
+
+class TelegramLoginPayload(BaseModel):
+    telegram_user_id: int = Field(..., ge=1)
+    token: str = Field(..., min_length=BOT_LOGIN_TOKEN_MIN_LENGTH, max_length=128)
+
+
+class TelegramTokenSetPayload(BaseModel):
+    token: str = Field(..., min_length=BOT_LOGIN_TOKEN_MIN_LENGTH, max_length=128)
 
 
 class AuthResponse(BaseModel):
@@ -296,6 +309,14 @@ def _issue_auth_response(user: User, pref: UserPreference) -> dict:
     ).model_dump()
 
 
+def _require_internal_token(x_internal_token: Optional[str]) -> None:
+    if not BOT_INTERNAL_TOKEN:
+        raise HTTPException(status_code=503, detail="internal_token_not_configured")
+    token = (x_internal_token or "").strip()
+    if not token or not secrets.compare_digest(token, BOT_INTERNAL_TOKEN):
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+
 @router.post("/users", status_code=201, response_model=UserWithPreference)
 def register_user(
     req: Request,
@@ -378,6 +399,29 @@ def auth_login(
     return _issue_auth_response(user, pref)
 
 
+@router.post("/auth/telegram-login", response_model=AuthResponse)
+def auth_telegram_login(
+    payload: TelegramLoginPayload,
+    db: Session = Depends(get_db),
+    x_internal_token: Optional[str] = Header(default=None),
+):
+    _require_internal_token(x_internal_token)
+    user = db.query(User).filter(User.telegram_user_id == payload.telegram_user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="telegram_user_not_linked")
+    if not user.is_bot_enabled:
+        raise HTTPException(status_code=403, detail="bot_disabled")
+    if not user.telegram_login_token:
+        raise HTTPException(status_code=409, detail="telegram_token_not_set")
+    if not verify_login_token(payload.token, user.telegram_login_token):
+        raise HTTPException(status_code=401, detail="invalid_credentials")
+    user.last_login_at = _now()
+    db.commit()
+    db.refresh(user)
+    pref = _ensure_preference(user, db)
+    return _issue_auth_response(user, pref)
+
+
 @router.post("/auth/refresh", response_model=AuthResponse)
 def auth_refresh(
     payload: AuthRefreshPayload,
@@ -434,6 +478,40 @@ def update_preferences(
     db.refresh(pref)
     resp = PreferenceOut.model_validate(pref, from_attributes=True).model_dump()
     return _cache_or_return(cache_key, resp)
+
+
+@router.post("/users/me/telegram-token")
+def set_telegram_login_token(
+    payload: TelegramTokenSetPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user.telegram_user_id:
+        raise HTTPException(status_code=409, detail="telegram_user_not_linked")
+    salt, token_hash = hash_login_token(payload.token)
+    current_user.telegram_login_token = f"{salt}:{token_hash}"
+    current_user.updated_at = _now()
+    db.commit()
+    db.refresh(current_user)
+    return {"ok": True}
+
+
+@router.post("/users/me/telegram-token/auto")
+def auto_set_telegram_login_token(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    x_internal_token: Optional[str] = Header(default=None),
+):
+    _require_internal_token(x_internal_token)
+    if not current_user.telegram_user_id:
+        raise HTTPException(status_code=409, detail="telegram_user_not_linked")
+    token = secrets.token_urlsafe(32)
+    salt, token_hash = hash_login_token(token)
+    current_user.telegram_login_token = f"{salt}:{token_hash}"
+    current_user.updated_at = _now()
+    db.commit()
+    db.refresh(current_user)
+    return {"token": token}
 
 
 @router.post("/users/link-telegram", response_model=UserOut)

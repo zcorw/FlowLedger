@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS "user".users (
   password_salt    TEXT   NULL,
   last_login_at    TIMESTAMPTZ NULL,
   telegram_user_id BIGINT NULL UNIQUE,
+  telegram_login_token TEXT NULL,
   is_bot_enabled   BOOLEAN NOT NULL DEFAULT true,
   email_verification_token TEXT NULL,
   email_verification_expires_at TIMESTAMPTZ NULL,

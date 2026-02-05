@@ -16,6 +16,7 @@ class StateStore:
             "telegram_to_user": {},
             "telegram_to_token": {},
             "telegram_to_refresh": {},
+            "telegram_to_login_token": {},
             "pending_receipts": {},
             "active_receipt_edit": {},
         }
@@ -32,6 +33,7 @@ class StateStore:
         self._data.setdefault("telegram_to_user", {})
         self._data.setdefault("telegram_to_token", {})
         self._data.setdefault("telegram_to_refresh", {})
+        self._data.setdefault("telegram_to_login_token", {})
         self._data.setdefault("pending_receipts", {})
         self._data.setdefault("active_receipt_edit", {})
 
@@ -65,6 +67,16 @@ class StateStore:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
 
+    async def get_login_token(self, telegram_user_id: int) -> Optional[str]:
+        async with self._lock:
+            return self._data.get("telegram_to_login_token", {}).get(str(telegram_user_id))
+
+    async def set_login_token(self, telegram_user_id: int, token: str) -> None:
+        async with self._lock:
+            self._data.setdefault("telegram_to_login_token", {})[str(telegram_user_id)] = token
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
+
     async def clear_user_id(self, telegram_user_id: int) -> None:
         async with self._lock:
             self._data.get("telegram_to_user", {}).pop(str(telegram_user_id), None)
@@ -80,6 +92,12 @@ class StateStore:
     async def clear_refresh_token(self, telegram_user_id: int) -> None:
         async with self._lock:
             self._data.get("telegram_to_refresh", {}).pop(str(telegram_user_id), None)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
+
+    async def clear_login_token(self, telegram_user_id: int) -> None:
+        async with self._lock:
+            self._data.get("telegram_to_login_token", {}).pop(str(telegram_user_id), None)
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
 

@@ -20,6 +20,7 @@ AUTH_TOKEN_TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", "604800"))  # 7
 AUTH_REFRESH_TOKEN_TTL_SECONDS = int(os.getenv("AUTH_REFRESH_TOKEN_TTL_SECONDS", "2592000"))  # 30 days
 PASSWORD_HASH_ITERATIONS = int(os.getenv("PASSWORD_HASH_ITERATIONS", "200_000"))
 PASSWORD_MIN_LENGTH = 8
+BOT_LOGIN_TOKEN_MIN_LENGTH = int(os.getenv("BOT_LOGIN_TOKEN_MIN_LENGTH", "6"))
 
 
 def _ensure_secret():
@@ -41,6 +42,36 @@ def hash_password(password: str, salt: Optional[str] = None) -> tuple[str, str]:
     )
     password_hash = base64.b64encode(digest).decode("ascii")
     return salt, password_hash
+
+
+def hash_login_token(token: str, salt: Optional[str] = None) -> tuple[str, str]:
+    if not token or len(token) < BOT_LOGIN_TOKEN_MIN_LENGTH:
+        raise ValueError("token_too_short")
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        token.encode("utf-8"),
+        salt.encode("utf-8"),
+        PASSWORD_HASH_ITERATIONS,
+    )
+    token_hash = base64.b64encode(digest).decode("ascii")
+    return salt, token_hash
+
+
+def verify_login_token(token: str, stored: str) -> bool:
+    if not token or not stored or ":" not in stored:
+        return False
+    salt, expected_hash = stored.split(":", 1)
+    if not salt or not expected_hash:
+        return False
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        token.encode("utf-8"),
+        salt.encode("utf-8"),
+        PASSWORD_HASH_ITERATIONS,
+    )
+    token_hash = base64.b64encode(digest).decode("ascii")
+    return hmac.compare_digest(token_hash, expected_hash)
 
 
 def verify_password(password: str, salt: str, expected_hash: str) -> bool:

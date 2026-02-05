@@ -45,9 +45,15 @@ class BotService:
         if telegram_user_id is None:
             return None, "Missing Telegram user information."
         token = await self.state.get_token(telegram_user_id)
-        if not token:
-            return None, "Account not linked yet. Use /start &lt;username&gt; &lt;password&gt;."
-        return token, None
+        if token:
+            return token, None
+        login_token = await self.state.get_login_token(telegram_user_id)
+        if login_token:
+            refreshed, err = await self.login_with_bot_token(telegram_user_id)
+            if refreshed:
+                return refreshed, None
+            return None, err or "Account not linked yet. Use /start &lt;username&gt; &lt;password&gt;."
+        return None, "Account not linked yet. Use /start &lt;username&gt; &lt;password&gt;."
 
     async def _handle_unauthorized(self, telegram_user_id: Optional[int]) -> None:
         if telegram_user_id is None:
@@ -55,6 +61,50 @@ class BotService:
         await self.state.clear_token(telegram_user_id)
         await self.state.clear_refresh_token(telegram_user_id)
         await self.state.clear_user_id(telegram_user_id)
+
+    async def login_with_bot_token(
+        self, telegram_user_id: Optional[int]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        if telegram_user_id is None:
+            return None, "Missing Telegram user information."
+        if not self.client:
+            return None, "HTTP client is not ready."
+        login_token = await self.state.get_login_token(telegram_user_id)
+        if not login_token:
+            return None, "Bot login token not set. Use /start &lt;username&gt; &lt;password&gt;."
+        if not self.config.internal_token:
+            return None, "BOT_INTERNAL_TOKEN is not configured for the bot."
+
+        try:
+            resp = await self.client.post(
+                "/auth/telegram-login",
+                headers={"X-Internal-Token": self.config.internal_token},
+                json={"telegram_user_id": telegram_user_id, "token": login_token},
+            )
+        except Exception as exc:
+            return None, f"Failed to login with bot token: {exc}"
+
+        if resp.status_code == 409:
+            await self.state.clear_login_token(telegram_user_id)
+            return None, "Bot login token not set on the account. Use /start &lt;username&gt; &lt;password&gt;."
+        if resp.status_code == 401:
+            await self.state.clear_login_token(telegram_user_id)
+            return None, "Bot login token invalid. Use /start &lt;username&gt; &lt;password&gt;."
+        if resp.status_code >= 400:
+            return None, f"Bot login failed: {resp.text}"
+
+        data = resp.json()
+        access_token = data.get("access_token")
+        refresh_token = data.get("refresh_token")
+        user = data.get("user") or {}
+        user_id = user.get("id")
+        if not access_token or not refresh_token or not user_id:
+            return None, "Bot login succeeded but response is incomplete."
+
+        await self.state.set_token(telegram_user_id, access_token)
+        await self.state.set_refresh_token(telegram_user_id, refresh_token)
+        await self.state.set_user_id(telegram_user_id, user_id)
+        return access_token, None
 
     async def _refresh_access_token(
         self, telegram_user_id: Optional[int]
@@ -65,6 +115,13 @@ class BotService:
             return None, "HTTP client is not ready."
         refresh_token = await self.state.get_refresh_token(telegram_user_id)
         if not refresh_token:
+            login_token = await self.state.get_login_token(telegram_user_id)
+            if login_token:
+                token, err = await self.login_with_bot_token(telegram_user_id)
+                if token:
+                    return token, None
+                await self._handle_unauthorized(telegram_user_id)
+                return None, err or "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
             await self._handle_unauthorized(telegram_user_id)
             return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
         try:
@@ -75,6 +132,13 @@ class BotService:
         except Exception as exc:
             return None, f"Failed to refresh session: {exc}"
         if resp.status_code >= 400:
+            login_token = await self.state.get_login_token(telegram_user_id)
+            if login_token:
+                token, err = await self.login_with_bot_token(telegram_user_id)
+                if token:
+                    return token, None
+                await self._handle_unauthorized(telegram_user_id)
+                return None, err or "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
             await self._handle_unauthorized(telegram_user_id)
             return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
         data = resp.json()
@@ -130,7 +194,62 @@ class BotService:
 
         await self.state.set_user_id(telegram_user_id, link_data["id"])
         await self.state.set_token(telegram_user_id, token)
+        await self._ensure_bot_login_token(token, telegram_user_id)
         return link_data["id"], None
+
+    async def _ensure_bot_login_token(
+        self, token: str, telegram_user_id: Optional[int]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        if not self.client:
+            return None, "HTTP client is not ready."
+        if telegram_user_id is None:
+            return None, "Missing Telegram user information."
+        if not self.config.internal_token:
+            return None, "BOT_INTERNAL_TOKEN is not configured for the bot."
+        existing = await self.state.get_login_token(telegram_user_id)
+        if existing:
+            return existing, None
+        try:
+            resp = await self.client.post(
+                "/users/me/telegram-token/auto",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-Internal-Token": self.config.internal_token,
+                    "Idempotency-Key": str(uuid4()),
+                },
+            )
+        except Exception as exc:
+            return None, f"Failed to set bot login token: {exc}"
+
+        if resp.status_code == 401:
+            refreshed, refresh_err = await self._refresh_access_token(telegram_user_id)
+            if not refreshed:
+                return None, refresh_err
+            try:
+                resp = await self.client.post(
+                    "/users/me/telegram-token/auto",
+                    headers={
+                        "Authorization": f"Bearer {refreshed}",
+                        "X-Internal-Token": self.config.internal_token,
+                        "Idempotency-Key": str(uuid4()),
+                    },
+                )
+            except Exception as exc:
+                return None, f"Failed to set bot login token: {exc}"
+            if resp.status_code == 401:
+                await self._handle_unauthorized(telegram_user_id)
+                return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
+        if resp.status_code == 409:
+            return None, "Please link your Telegram account first."
+        if resp.status_code >= 400:
+            return None, f"Failed to set bot login token: {resp.text}"
+
+        data = resp.json()
+        login_token = data.get("token")
+        if not login_token:
+            return None, "Bot login token was not returned."
+        await self.state.set_login_token(telegram_user_id, login_token)
+        return login_token, None
 
     async def link_user_with_token(
         self,
