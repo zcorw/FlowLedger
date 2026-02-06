@@ -11,7 +11,9 @@ from sendgrid.helpers.mail import Mail
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 SENDGRID_FROM_EMAIL = os.getenv("SENDGRID_FROM_EMAIL", "no-reply@example.com")
 EMAIL_VERIFICATION_URL = os.getenv("EMAIL_VERIFICATION_URL", "http://localhost:3000/verify-email")
+PASSWORD_RESET_URL = os.getenv("PASSWORD_RESET_URL", "http://localhost:3000/reset-password")
 SENDGRID_VERIFICATION_TEMPLATE_ID = os.getenv("SENDGRID_VERIFICATION_TEMPLATE_ID")
+SENDGRID_PASSWORD_RESET_TEMPLATE_ID = os.getenv("SENDGRID_PASSWORD_RESET_TEMPLATE_ID")
 EMAIL_VERIFICATION_ENABLED = os.getenv("EMAIL_VERIFICATION_ENABLED", "true").lower() == "true"
 
 
@@ -51,3 +53,30 @@ def send_verification_email(to_email: str, token: str):
         client.send(message)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail="failed_to_send_verification_email") from exc
+
+
+def _build_reset_link(token: str) -> str:
+    sep = "&" if "?" in PASSWORD_RESET_URL else "?"
+    return f"{PASSWORD_RESET_URL}{sep}{urlencode({'token': token})}"
+
+
+def send_password_reset_email(to_email: str, token: str):
+    if not EMAIL_VERIFICATION_ENABLED:
+        return
+    _ensure_sendgrid_config()
+    if not SENDGRID_PASSWORD_RESET_TEMPLATE_ID:
+        raise HTTPException(status_code=500, detail="password_reset_template_not_configured")
+    link = _build_reset_link(token)
+    message = Mail(
+        from_email=SENDGRID_FROM_EMAIL,
+        to_emails=to_email,
+        template_id=SENDGRID_PASSWORD_RESET_TEMPLATE_ID,
+    )
+    message.dynamic_template_data = {
+        "reset_url": link,
+    }
+    try:
+        client = SendGridAPIClient(SENDGRID_API_KEY)
+        client.send(message)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail="failed_to_send_password_reset_email") from exc

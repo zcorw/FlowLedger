@@ -70,11 +70,6 @@ class User(Base):
     email: Mapped[str | None] = mapped_column(String, nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     password_salt: Mapped[str | None] = mapped_column(String, nullable=True)
-    email_verification_token: Mapped[str | None] = mapped_column(String, nullable=True)
-    email_verification_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
     email_verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
@@ -109,6 +104,34 @@ class UserPreference(Base):
     base_currency: Mapped[str] = mapped_column(String, nullable=False)
     timezone: Mapped[str] = mapped_column(String, nullable=False)
     language: Mapped[str] = mapped_column(String, nullable=False, default="zh-CN")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AuthToken(Base):
+    __tablename__ = "auth_tokens"
+    __table_args__ = (
+        CheckConstraint(
+            "token_type IN ('email_verification','password_reset')",
+            name="ck_auth_tokens__type",
+        ),
+        UniqueConstraint("token", name="uq_auth_tokens__token"),
+        Index("idx_auth_tokens__user_type", "user_id", "token_type"),
+        {"schema": "user"},
+    )
+
+    _id_type = BigInteger().with_variant(Integer, "sqlite")
+
+    id: Mapped[int] = mapped_column(_id_type, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        _id_type,
+        ForeignKey("user.users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    token: Mapped[str] = mapped_column(String, nullable=False)
+    token_type: Mapped[str] = mapped_column(String, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_valid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

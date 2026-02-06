@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
-from ..models import Currency, User, UserPreference
+from ..models import AuthToken, Currency, User, UserPreference
 from ..auth import (
     AUTH_TOKEN_TTL_SECONDS,
     AUTH_REFRESH_TOKEN_TTL_SECONDS,
@@ -27,7 +27,7 @@ from ..auth import (
     verify_password,
 )
 from ..auth import generate_access_token
-from ..email_service import send_verification_email
+from ..email_provider import send_password_reset_email, send_verification_email
 
 router = APIRouter(prefix="/v1", tags=["user"])
 
@@ -38,6 +38,9 @@ DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANG", "zh-CN")
 BOT_INTERNAL_TOKEN = os.getenv("BOT_INTERNAL_TOKEN", "").strip()
 EMAIL_VERIFICATION_TOKEN_TTL_SECONDS = int(os.getenv("EMAIL_VERIFICATION_TOKEN_TTL_SECONDS", "86400"))
 EMAIL_VERIFICATION_ENABLED = os.getenv("EMAIL_VERIFICATION_ENABLED", "true").lower() == "true"
+PASSWORD_RESET_TOKEN_TTL_SECONDS = int(os.getenv("PASSWORD_RESET_TOKEN_TTL_SECONDS", "3600"))
+AUTH_TOKEN_EMAIL_VERIFY = "email_verification"
+AUTH_TOKEN_PASSWORD_RESET = "password_reset"
 REGISTRATION_DAILY_LIMIT_NO_EMAIL = int(os.getenv("REGISTRATION_DAILY_LIMIT_NO_EMAIL", "50"))
 LANGUAGE_PATTERN = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{3,32}$")
@@ -156,6 +159,15 @@ class AuthRefreshPayload(BaseModel):
     refresh_token: str = Field(..., min_length=16)
 
 
+class PasswordResetRequestPayload(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetConfirmPayload(BaseModel):
+    token: str = Field(..., min_length=16)
+    password: str = Field(..., min_length=PASSWORD_MIN_LENGTH, max_length=128)
+
+
 def get_current_user(
     db: Session = Depends(get_db),
     user_id: int = Depends(resolve_user_id),
@@ -242,7 +254,7 @@ def _apply_credentials(
     user.password_hash = password_hash
 
 
-def _set_email_verification(user: User) -> Optional[str]:
+def _set_email_verification(user: User, db: Session) -> Optional[str]:
     if not EMAIL_VERIFICATION_ENABLED:
         # user.email_verified_at = _now()
         # user.email_verification_token = None
@@ -251,11 +263,18 @@ def _set_email_verification(user: User) -> Optional[str]:
     if not user.email:
         return None
     token = secrets.token_urlsafe(32)
-    user.email_verification_token = token
-    user.email_verification_expires_at = _now() + timedelta(
-        seconds=EMAIL_VERIFICATION_TOKEN_TTL_SECONDS
+    now = _now()
+    auth_token = AuthToken(
+        user_id=user.id,
+        token=token,
+        token_type=AUTH_TOKEN_EMAIL_VERIFY,
+        expires_at=now + timedelta(seconds=EMAIL_VERIFICATION_TOKEN_TTL_SECONDS),
+        is_valid=True,
+        created_at=now,
+        updated_at=now,
     )
     user.email_verified_at = None
+    db.add(auth_token)
     return token
 
 
@@ -271,9 +290,9 @@ def _create_user_with_pref(
     now = _now()
     user = User(is_bot_enabled=True, created_at=now, updated_at=now)
     _apply_credentials(user, username, password, email, db)
-    verification_token = _set_email_verification(user)
     db.add(user)
     db.flush()
+    verification_token = _set_email_verification(user, db)
     pref = UserPreference(
         user_id=user.id,
         base_currency=_validate_currency(base_currency or DEFAULT_BASE_CURRENCY, db),
@@ -437,19 +456,86 @@ def auth_refresh(
 
 @router.get("/auth/verify-email", response_model=AuthResponse)
 def verify_email(token: str, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email_verification_token == token).first()
+    auth_token = (
+        db.query(AuthToken)
+        .filter(
+            AuthToken.token == token,
+            AuthToken.token_type == AUTH_TOKEN_EMAIL_VERIFY,
+            AuthToken.is_valid.is_(True),
+        )
+        .first()
+    )
+    if not auth_token:
+        raise HTTPException(status_code=400, detail="invalid_or_expired_verification_token")
+    if auth_token.expires_at and auth_token.expires_at < _now():
+        raise HTTPException(status_code=400, detail="invalid_or_expired_verification_token")
+    user = db.get(User, auth_token.user_id)
     if not user:
         raise HTTPException(status_code=400, detail="invalid_or_expired_verification_token")
-    if user.email_verification_expires_at and user.email_verification_expires_at < _now():
-        raise HTTPException(status_code=400, detail="invalid_or_expired_verification_token")
     user.email_verified_at = _now()
-    user.email_verification_token = None
-    user.email_verification_expires_at = None
     user.updated_at = _now()
+    auth_token.is_valid = False
     db.commit()
     db.refresh(user)
     pref = _ensure_preference(user, db)
     return _issue_auth_response(user, pref)
+
+
+@router.post("/auth/password-reset")
+def request_password_reset(
+    payload: PasswordResetRequestPayload,
+    db: Session = Depends(get_db),
+):
+    norm_email = _normalize_email(payload.email)
+    user = db.query(User).filter(User.email == norm_email).first()
+    if not user or not user.email or not user.email_verified_at:
+        return {"ok": True}
+    token = secrets.token_urlsafe(32)
+    now = _now()
+    auth_token = AuthToken(
+        user_id=user.id,
+        token=token,
+        token_type=AUTH_TOKEN_PASSWORD_RESET,
+        expires_at=now + timedelta(seconds=PASSWORD_RESET_TOKEN_TTL_SECONDS),
+        is_valid=True,
+        created_at=now,
+        updated_at=now,
+    )
+    user.updated_at = _now()
+    db.add(auth_token)
+    db.commit()
+    send_password_reset_email(user.email, token)
+    return {"ok": True}
+
+
+@router.post("/auth/password-reset/confirm")
+def confirm_password_reset(
+    payload: PasswordResetConfirmPayload,
+    db: Session = Depends(get_db),
+):
+    auth_token = (
+        db.query(AuthToken)
+        .filter(
+            AuthToken.token == payload.token,
+            AuthToken.token_type == AUTH_TOKEN_PASSWORD_RESET,
+            AuthToken.is_valid.is_(True),
+        )
+        .first()
+    )
+    if not auth_token:
+        raise HTTPException(status_code=400, detail="invalid_or_expired_reset_token")
+    if auth_token.expires_at and auth_token.expires_at < _now():
+        raise HTTPException(status_code=400, detail="invalid_or_expired_reset_token")
+    user = db.get(User, auth_token.user_id)
+    if not user:
+        raise HTTPException(status_code=400, detail="invalid_or_expired_reset_token")
+    salt, password_hash = hash_password(payload.password)
+    user.password_salt = salt
+    user.password_hash = password_hash
+    user.updated_at = _now()
+    auth_token.is_valid = False
+    db.commit()
+    return {"ok": True}
 
 
 @router.patch("/users/me/preferences", response_model=PreferenceOut)
