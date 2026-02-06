@@ -411,6 +411,8 @@ def auth_login(
         raise HTTPException(status_code=401, detail="invalid_credentials")
     if not verify_password(payload.password, user.password_salt, user.password_hash):
         raise HTTPException(status_code=401, detail="invalid_credentials")
+    if not user.email_verified_at:
+        raise HTTPException(status_code=403, detail="email_not_verified")
     user.last_login_at = _now()
     db.commit()
     db.refresh(user)
