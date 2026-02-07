@@ -36,6 +36,16 @@ def get_current_user(
     return user
 
 
+def get_user_pref(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> UserPreference:
+    pref = db.query(UserPreference).filter(UserPreference.user_id == current_user.id).first()
+    if not pref:
+        raise HTTPException(status_code=404, detail="user_pref_not_found")
+    return pref
+
+
 class InstitutionAssetChange(BaseModel):
     institution_id: int
     institution_name: str
@@ -105,10 +115,8 @@ def list_institution_asset_changes(
     limit: int = Query(10, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    pref: UserPreference = Depends(get_user_pref),
 ):
-    pref = db.query(UserPreference).filter(UserPreference.user_id == current_user.id).first()
-    if not pref:
-        raise HTTPException(status_code=404, detail="user_pref_not_found")
     base_currency = pref.base_currency
 
     sql = text(
@@ -234,10 +242,8 @@ def get_monthly_assets(
     limit: Optional[int] = Query(None,ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    pref: UserPreference = Depends(get_user_pref),
 ):
-    pref = db.query(UserPreference).filter(UserPreference.user_id == current_user.id).first()
-    if not pref:
-        raise HTTPException(status_code=404, detail="user_pref_not_found")
     base_currency = pref.base_currency
 
     sql = text(
@@ -305,10 +311,8 @@ def get_monthly_assets(
 def get_latest_total_amount(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    pref: UserPreference = Depends(get_user_pref),
 ):
-    pref = db.query(UserPreference).filter(UserPreference.user_id == current_user.id).first()
-    if not pref:
-        raise HTTPException(status_code=404, detail="user_pref_not_found")
     base_currency = pref.base_currency
 
     sql = text(
@@ -363,10 +367,8 @@ def get_total_assets_by_currency(
     key: str = Query("currency", regex="^(currency|product_type)$"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    pref: UserPreference = Depends(get_user_pref),
 ):
-    pref = db.query(UserPreference).filter(UserPreference.user_id == current_user.id).first()
-    if not pref:
-        raise HTTPException(status_code=404, detail="user_pref_not_found")
     base_currency = pref.base_currency
 
     sql = text(
@@ -436,6 +438,7 @@ def get_expense_total_compare(
     to_dt: Optional[datetime] = Query(None, alias="to"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    pref: UserPreference = Depends(get_user_pref),
 ):
     if not from_dt or not to_dt:
         raise HTTPException(status_code=422, detail="missing_time_range")
@@ -446,9 +449,6 @@ def get_expense_total_compare(
     prev_from = from_dt - duration
     prev_to = from_dt
 
-    pref = db.query(UserPreference).filter(UserPreference.user_id == current_user.id).first()
-    if not pref:
-        raise HTTPException(status_code=404, detail="user_pref_not_found")
     base_currency = pref.base_currency
 
     sql = text(
