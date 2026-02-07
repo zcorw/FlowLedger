@@ -72,7 +72,7 @@ class AssetCurrencyPoint(BaseModel):
     amount: Decimal
     change: Decimal
     rate: Decimal
-    currency: str
+    target: str
     
     @field_serializer("amount")
     def serialize_amount(self, v: Decimal):
@@ -99,7 +99,6 @@ class ExpensePeriodCompareOut(BaseModel):
     previous_total: Decimal
     delta: Decimal
     delta_rate: Decimal
-    
 
 @router.get("/institutions/assets/changes", response_model=InstitutionAssetChangeOut)
 def list_institution_asset_changes(
@@ -359,8 +358,9 @@ def get_latest_total_amount(
         total=row["total_amount"],
     ).model_dump()
     
-@router.get("/total/assets/currency", response_model=AssetCurrencyTotalOut)
+@router.get("/total/products/compare", response_model=AssetCurrencyTotalOut)
 def get_total_assets_by_currency(
+    key: str = Query("currency", regex="^(currency|product_type)$"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -370,11 +370,11 @@ def get_total_assets_by_currency(
     base_currency = pref.base_currency
 
     sql = text(
-        """
+        f"""
         WITH balance_fx AS (
           SELECT
             fp.id,
-            fp.currency,
+            fp.{key} AS target,
             pb.as_of,
             pb.amount,
             DENSE_RANK() OVER (ORDER BY pb.as_of DESC) AS rnk,
@@ -396,11 +396,11 @@ def get_total_assets_by_currency(
         SELECT
           SUM(amount * fx_rate) AS total,
           as_of,
-          currency
+          target
         FROM balance_fx
         WHERE fx_rate IS NOT NULL
           AND rnk <= 2
-        GROUP BY as_of, currency
+        GROUP BY as_of, target
         ORDER BY as_of DESC
         """
     )
@@ -413,13 +413,14 @@ def get_total_assets_by_currency(
     ).mappings())
     results: List[AssetCurrencyPoint] = [] 
     grouped = defaultdict(list)
+    print(rows)
     for row in rows:
-        grouped[row["currency"]].append(row)
-    for currency, rows in grouped.items():
+        grouped[row["target"]].append(row)
+    for target, rows in grouped.items():
         change = rows[0]["total"] - rows[1]["total"] if len(rows) > 1 else 0
         rate = change / rows[0]["total"] if len(rows) > 1 else 1
         results.append(AssetCurrencyPoint(
-            currency=currency,
+            target=target,
             amount=rows[0]["total"],
             change=change,
             rate=rate,
