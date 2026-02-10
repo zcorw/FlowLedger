@@ -157,10 +157,36 @@ services:
     networks:
       - backend
 
+  demo-reset:
+    image: alpine:3.19
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+    volumes:
+      - ./:/work:ro
+      - demo_reset_logs:/var/log
+    entrypoint: ["/bin/sh","-lc"]
+    command: >-
+      'set -e;
+       apk add --no-cache postgresql-client tzdata;
+       cp /work/scripts/reset_demo_user.cron /etc/crontabs/root;
+       echo "Demo reset cron installed:";
+       cat /etc/crontabs/root;
+       crond -f -L /var/log/cron.log'
+    networks:
+      - backend
+
 volumes:
   pgdata:
     driver: local
   botdata:
+    driver: local
+  demo_reset_logs:
     driver: local
 
 networks:

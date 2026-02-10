@@ -1,0 +1,2 @@
+# Run daily at 03:00 server time
+0 3 * * * /bin/sh /work/scripts/reset_demo_user.sh >> /var/log/reset_demo_user.log 2>&1
