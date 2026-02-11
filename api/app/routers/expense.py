@@ -269,9 +269,17 @@ def get_most_used_category(
     )
     
     if not cats:
-        return {"data": []}
+        _cats = (
+            db.query(ExpenseCategory)
+            .filter(ExpenseCategory.user_id == current_user.id)
+            .limit(limit)
+            .all()
+        )
+        if not _cats:
+            raise HTTPException(status_code=404, detail="no_categories_found")
+        return {"data": [CategoryUsageOut.model_validate({"id": c.id, "name": c.name, "count": 1}, from_attributes=True).model_dump() for c in _cats]}
     
-    return {"data": [{"name": c.name, "count": int(c.usage_count)} for c in cats]}
+    return {"data": [CategoryUsageOut.model_validate({"id": c.id, "name": c.name, "count": c.usage_count}, from_attributes=True).model_dump() for c in cats]}
 
 
 class ExpenseIn(BaseModel):

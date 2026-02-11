@@ -491,6 +491,16 @@ def list_most_used_institutions(
         .limit(limit)
         .all()
     )
+    if not insts:
+        _insts = (
+            db.query(Institution)
+            .filter(Institution.user_id == current_user.id)
+            .limit(limit)
+            .all()
+        )
+        if not _insts:
+            raise HTTPException(status_code=404, detail="no_institutions_found")
+        return {"data": [InstitutionUsageOut.model_validate({"id": c.id, "name": c.name, "count": 1}, from_attributes=True).model_dump() for c in _insts]}
     
     return { "data": [InstitutionUsageOut.model_validate({ "id": c.id, "name": c.name, "usage_count": c.usage_count }).model_dump() for c in insts] }
 
