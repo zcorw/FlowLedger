@@ -475,9 +475,16 @@ def list_most_used_institutions(
     current_user: User = Depends(get_current_user),
     limit: int = Query(4, ge=1, le=20),
 ):
+    recent_expenses = (
+        db.query(Expense.paid_account_id)
+        .filter(Expense.user_id == current_user.id, Expense.paid_account_id.isnot(None))
+        .order_by(Expense.occurred_at.desc(), Expense.id.desc())
+        .limit(30)
+        .subquery()
+    )
     insts = (
         db.query(Institution.id, Institution.name, func.count(Institution.id).label("usage_count"))
-        .join(Expense, Expense.paid_account_id == Institution.id)
+        .join(recent_expenses, recent_expenses.c.paid_account_id == Institution.id)
         .filter(Institution.user_id == current_user.id)
         .group_by(Institution.id)
         .order_by(desc("usage_count"))

@@ -247,16 +247,23 @@ def get_most_used_category(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    recent_expenses = (
+        db.query(Expense.category_id)
+        .filter(Expense.user_id == current_user.id, Expense.category_id.isnot(None))
+        .order_by(Expense.occurred_at.desc(), Expense.id.desc())
+        .limit(30)
+        .subquery()
+    )
     cats = (
         db.query(
             ExpenseCategory.id,
             ExpenseCategory.name,
-            func.count(Expense.id).label("usage_count"),
+            func.count(ExpenseCategory.id).label("usage_count"),
         )
-        .join(Expense, Expense.category_id == ExpenseCategory.id)
-        .filter(Expense.user_id == current_user.id)
+        .join(recent_expenses, recent_expenses.c.category_id == ExpenseCategory.id)
+        .filter(ExpenseCategory.user_id == current_user.id)
         .group_by(ExpenseCategory.id)
-        .order_by(desc(func.count("usage_count")))
+        .order_by(desc("usage_count"))
         .limit(limit)
         .all()
     )
