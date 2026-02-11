@@ -10,6 +10,7 @@ import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, validator, field_serializer
+from sqlalchemy import func, desc
 from sqlalchemy.orm import Session
 
 from ..auth import resolve_user_id
@@ -174,6 +175,20 @@ class CategoryOut(BaseModel):
         return float(v)
 
 
+class CategoryListOut(BaseModel):
+    data: List[CategoryOut]
+
+
+class CategoryUsageOut(BaseModel):
+    id: int
+    name: str
+    count: int
+
+
+class CategoryUsageListOut(BaseModel):
+    data: List[CategoryUsageOut]
+
+
 # Idempotent category create scoped per user; duplicate name returns 409
 @router.post("/categories", status_code=201, response_model=CategoryOut)
 def create_category(
@@ -225,6 +240,31 @@ def list_categories(
         .all()
     )
     return {"data": [CategoryOut.model_validate(c, from_attributes=True).model_dump() for c in cats]}
+
+@router.get("/categories/most-used", response_model=CategoryUsageListOut)
+def get_most_used_category(
+    limit: int = Query(4, ge=1, le=20),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    cats = (
+        db.query(
+            ExpenseCategory.id,
+            ExpenseCategory.name,
+            func.count(Expense.id).label("usage_count"),
+        )
+        .join(Expense, Expense.category_id == ExpenseCategory.id)
+        .filter(Expense.user_id == current_user.id)
+        .group_by(ExpenseCategory.id)
+        .order_by(desc(func.count("usage_count")))
+        .limit(limit)
+        .all()
+    )
+    
+    if not cats:
+        return {"data": []}
+    
+    return {"data": [{"name": c.name, "count": int(c.usage_count)} for c in cats]}
 
 
 class ExpenseIn(BaseModel):

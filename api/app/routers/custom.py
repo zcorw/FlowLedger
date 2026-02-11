@@ -415,7 +415,6 @@ def get_total_assets_by_currency(
     ).mappings())
     results: List[AssetCurrencyPoint] = [] 
     grouped = defaultdict(list)
-    print(rows)
     for row in rows:
         grouped[row["target"]].append(row)
     for target, rows in grouped.items():

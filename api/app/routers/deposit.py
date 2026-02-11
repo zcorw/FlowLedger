@@ -11,7 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Qu
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, validator
-from sqlalchemy import func, text
+from sqlalchemy import func, desc
 from sqlalchemy.orm import Session
 
 from ..auth import resolve_user_id
@@ -25,7 +25,7 @@ from ..exporters.deposit_excel import (
 )
 from ..import_tasks import create_task, get_task, save_upload_file, update_task
 from ..importers.deposit_excel import parse_deposit_import_path
-from ..models import Currency, FinancialProduct, Institution, ProductBalance, User
+from ..models import Currency, FinancialProduct, Institution, ProductBalance, User, Expense
 from ..schemas.deposit_import import (
     ImportBalanceResult,
     ImportDepositRequest,
@@ -35,6 +35,7 @@ from ..schemas.deposit_import import (
     ImportSectionResult,
 )
 from ..schemas.import_task import ImportTaskCreateResponse, ImportTaskStatus
+
 
 router = APIRouter(prefix="/v1", tags=["deposit"])
 
@@ -377,6 +378,14 @@ class LatestBalanceBatchResponse(BaseModel):
     updated: int
     failed: int
     items: List[LatestBalanceResult]
+    
+class InstitutionUsageOut(BaseModel):
+    id: int
+    name: str
+    usage_count: int
+
+class InstitutionUsageListOut(BaseModel):
+    data: List[InstitutionUsageOut]
 
 @router.post("/institutions", status_code=201, response_model=InstitutionOut)
 def create_institution(
@@ -459,7 +468,24 @@ def list_institutions(
         "has_next": (page * page_size) < total,
         "data": data,
     }
-
+    
+@router.get("/institutions/most-used", response_model=InstitutionUsageListOut)
+def list_most_used_institutions(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    limit: int = Query(4, ge=1, le=20),
+):
+    insts = (
+        db.query(Institution.id, Institution.name, func.count(Institution.id).label("usage_count"))
+        .join(Expense, Expense.paid_account_id == Institution.id)
+        .filter(Institution.user_id == current_user.id)
+        .group_by(Institution.id)
+        .order_by(desc("usage_count"))
+        .limit(limit)
+        .all()
+    )
+    
+    return { "data": [InstitutionUsageOut.model_validate({ "id": c.id, "name": c.name, "usage_count": c.usage_count }).model_dump() for c in insts] }
 
 @router.patch("/institutions/{institution_id}", response_model=InstitutionOut)
 def patch_institution(
