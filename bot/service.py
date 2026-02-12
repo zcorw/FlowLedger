@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional, Tuple, List
+from typing import Any, Optional, Tuple, List, Callable, Awaitable
 from uuid import uuid4
 
 import httpx
@@ -62,6 +62,75 @@ class BotService:
         await self.state.clear_refresh_token(telegram_user_id)
         await self.state.clear_user_id(telegram_user_id)
 
+    async def _reject_bot_login_token(
+        self, telegram_user_id: int, message: str
+    ) -> Tuple[Optional[str], Optional[str]]:
+        await self.state.clear_login_token(telegram_user_id)
+        return None, message
+
+    async def _fallback_bot_login(
+        self, telegram_user_id: Optional[int], *, message: str
+    ) -> Tuple[Optional[str], Optional[str]]:
+        login_token = await self.state.get_login_token(telegram_user_id)
+        if login_token:
+            token, err = await self.login_with_bot_token(telegram_user_id)
+            if token:
+                return token, None
+            await self._handle_unauthorized(telegram_user_id)
+            return None, err or message
+        await self._handle_unauthorized(telegram_user_id)
+        return None, message
+
+    async def _retry_unauthorized(
+        self,
+        resp: httpx.Response,
+        telegram_user_id: Optional[int],
+        retry_request: Callable[[str], Awaitable[httpx.Response]],
+        *,
+        error_prefix: str,
+    ) -> Tuple[httpx.Response, Optional[str]]:
+        if resp.status_code != 401:
+            return resp, None
+        refreshed, refresh_err = await self._refresh_access_token(telegram_user_id)
+        if not refreshed:
+            return resp, refresh_err
+        try:
+            resp = await retry_request(refreshed)
+        except Exception as exc:
+            return resp, f"{error_prefix}: {exc}"
+        if resp.status_code == 401:
+            await self._handle_unauthorized(telegram_user_id)
+            return resp, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
+        return resp, None
+
+    async def _request_with_retry(
+        self,
+        telegram_user_id: Optional[int],
+        token: str,
+        request_builder: Callable[[str], Awaitable[httpx.Response]],
+        *,
+        error_prefix: str,
+        http_error_handler: Optional[Callable[[httpx.Response], Optional[str]]] = None,
+    ) -> Tuple[Optional[httpx.Response], Optional[str]]:
+        if not self.client:
+            return None, "HTTP client is not ready."
+        try:
+            resp = await request_builder(token)
+        except Exception as exc:
+            return None, f"{error_prefix}: {exc}"
+        resp, err = await self._retry_unauthorized(
+            resp, telegram_user_id, request_builder, error_prefix=error_prefix
+        )
+        if err:
+            return None, err
+        if http_error_handler:
+            custom_error = http_error_handler(resp)
+            if custom_error:
+                return None, custom_error
+        if resp.status_code >= 400:
+            return None, f"{error_prefix}: {resp.text}"
+        return resp, None
+
     async def login_with_bot_token(
         self, telegram_user_id: Optional[int]
     ) -> Tuple[Optional[str], Optional[str]]:
@@ -85,11 +154,15 @@ class BotService:
             return None, f"Failed to login with bot token: {exc}"
 
         if resp.status_code == 409:
-            await self.state.clear_login_token(telegram_user_id)
-            return None, "Bot login token not set on the account. Use /start &lt;username&gt; &lt;password&gt;."
+            return await self._reject_bot_login_token(
+                telegram_user_id,
+                "Bot login token not set on the account. Use /start &lt;username&gt; &lt;password&gt;.",
+            )
         if resp.status_code == 401:
-            await self.state.clear_login_token(telegram_user_id)
-            return None, "Bot login token invalid. Use /start &lt;username&gt; &lt;password&gt;."
+            return await self._reject_bot_login_token(
+                telegram_user_id,
+                "Bot login token invalid. Use /start &lt;username&gt; &lt;password&gt;.",
+            )
         if resp.status_code >= 400:
             return None, f"Bot login failed: {resp.text}"
 
@@ -115,15 +188,10 @@ class BotService:
             return None, "HTTP client is not ready."
         refresh_token = await self.state.get_refresh_token(telegram_user_id)
         if not refresh_token:
-            login_token = await self.state.get_login_token(telegram_user_id)
-            if login_token:
-                token, err = await self.login_with_bot_token(telegram_user_id)
-                if token:
-                    return token, None
-                await self._handle_unauthorized(telegram_user_id)
-                return None, err or "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
-            await self._handle_unauthorized(telegram_user_id)
-            return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
+            return await self._fallback_bot_login(
+                telegram_user_id,
+                message="Session expired. Use /start &lt;username&gt; &lt;password&gt;.",
+            )
         try:
             resp = await self.client.post(
                 "/auth/refresh",
@@ -132,15 +200,10 @@ class BotService:
         except Exception as exc:
             return None, f"Failed to refresh session: {exc}"
         if resp.status_code >= 400:
-            login_token = await self.state.get_login_token(telegram_user_id)
-            if login_token:
-                token, err = await self.login_with_bot_token(telegram_user_id)
-                if token:
-                    return token, None
-                await self._handle_unauthorized(telegram_user_id)
-                return None, err or "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
-            await self._handle_unauthorized(telegram_user_id)
-            return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
+            return await self._fallback_bot_login(
+                telegram_user_id,
+                message="Session expired. Use /start &lt;username&gt; &lt;password&gt;.",
+            )
         data = resp.json()
         access_token = data.get("access_token")
         new_refresh = data.get("refresh_token")
@@ -266,42 +329,33 @@ class BotService:
         if link_token:
             payload["link_token"] = link_token
 
-        try:
-            resp = await self.client.post(
+        async def _link_request(bearer: str) -> httpx.Response:
+            return await self.client.post(
                 "/users/link-telegram",
                 headers={
-                    "Authorization": f"Bearer {token}",
+                    "Authorization": f"Bearer {bearer}",
                     "Idempotency-Key": str(uuid4()),
                 },
                 json=payload,
             )
-        except Exception as exc:
-            return None, f"Failed to link Telegram user: {exc}"
 
-        if resp.status_code == 401:
-            refreshed, refresh_err = await self._refresh_access_token(requester_telegram_user_id)
-            if not refreshed:
-                return None, refresh_err
-            try:
-                resp = await self.client.post(
-                    "/users/link-telegram",
-                    headers={
-                        "Authorization": f"Bearer {refreshed}",
-                        "Idempotency-Key": str(uuid4()),
-                    },
-                    json=payload,
-                )
-            except Exception as exc:
-                return None, f"Failed to link Telegram user: {exc}"
-            if resp.status_code == 401:
-                await self._handle_unauthorized(requester_telegram_user_id)
-                return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
-        if resp.status_code == 409:
-            return None, "This Telegram account is already bound to another user."
-        if resp.status_code == 404:
-            return None, "Link token is invalid."
-        if resp.status_code >= 400:
-            return None, f"Link failed: {resp.text}"
+        resp, err = await self._request_with_retry(
+            requester_telegram_user_id,
+            token,
+            _link_request,
+            error_prefix="Failed to link Telegram user",
+            http_error_handler=lambda resp: (
+                "This Telegram account is already bound to another user."
+                if resp.status_code == 409
+                else "Link token is invalid."
+                if resp.status_code == 404
+                else f"Link failed: {resp.text}"
+                if resp.status_code >= 400
+                else None
+            ),
+        )
+        if err:
+            return None, err
 
         data = resp.json()
         await self.state.set_user_id(telegram_user_id, data["id"])
@@ -310,92 +364,52 @@ class BotService:
     async def fetch_user(
         self, token: str, telegram_user_id: Optional[int] = None
     ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
-        if not self.client:
-            return None, "HTTP client is not ready."
-        try:
-            resp = await self.client.get("/users/me", headers={"Authorization": f"Bearer {token}"})
-        except Exception as exc:
-            return None, f"Failed to fetch user: {exc}"
-        if resp.status_code == 401:
-            refreshed, refresh_err = await self._refresh_access_token(telegram_user_id)
-            if not refreshed:
-                return None, refresh_err
-            try:
-                resp = await self.client.get(
-                    "/users/me", headers={"Authorization": f"Bearer {refreshed}"}
-                )
-            except Exception as exc:
-                return None, f"Failed to fetch user: {exc}"
-            if resp.status_code == 401:
-                await self._handle_unauthorized(telegram_user_id)
-                return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
-        if resp.status_code >= 400:
-            return None, f"Failed to fetch user: {resp.text}"
+        resp, err = await self._request_with_retry(
+            telegram_user_id,
+            token,
+            lambda bearer: self.client.get(
+                "/users/me", headers={"Authorization": f"Bearer {bearer}"}
+            ),
+            error_prefix="Failed to fetch user",
+        )
+        if err:
+            return None, err
         return resp.json(), None
 
     async def fetch_preferences(
         self, token: str, telegram_user_id: Optional[int] = None
     ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
-        if not self.client:
-            return None, "HTTP client is not ready."
-        try:
-            resp = await self.client.patch(
-                "/users/me/preferences", headers={"Authorization": f"Bearer {token}"}, json={}
-            )
-        except Exception as exc:
-            return None, f"Failed to fetch preferences: {exc}"
-        if resp.status_code == 401:
-            refreshed, refresh_err = await self._refresh_access_token(telegram_user_id)
-            if not refreshed:
-                return None, refresh_err
-            try:
-                resp = await self.client.patch(
-                    "/users/me/preferences",
-                    headers={"Authorization": f"Bearer {refreshed}"},
-                    json={},
-                )
-            except Exception as exc:
-                return None, f"Failed to fetch preferences: {exc}"
-            if resp.status_code == 401:
-                await self._handle_unauthorized(telegram_user_id)
-                return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
-        if resp.status_code >= 400:
-            return None, f"Failed to fetch preferences: {resp.text}"
+        resp, err = await self._request_with_retry(
+            telegram_user_id,
+            token,
+            lambda bearer: self.client.patch(
+                "/users/me/preferences", headers={"Authorization": f"Bearer {bearer}"}, json={}
+            ),
+            error_prefix="Failed to fetch preferences",
+        )
+        if err:
+            return None, err
         return resp.json(), None
 
     async def update_preference(
         self, token: str, field: str, value: str, telegram_user_id: Optional[int] = None
     ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
         payload = {field: value}
-        if not self.client:
-            return None, "HTTP client is not ready."
-        try:
-            resp = await self.client.patch(
-                "/users/me/preferences", headers={"Authorization": f"Bearer {token}"}, json=payload
-            )
-        except Exception as exc:
-            return None, f"Failed to update preference: {exc}"
-
-        if resp.status_code == 401:
-            refreshed, refresh_err = await self._refresh_access_token(telegram_user_id)
-            if not refreshed:
-                return None, refresh_err
-            try:
-                resp = await self.client.patch(
-                    "/users/me/preferences",
-                    headers={"Authorization": f"Bearer {refreshed}"},
-                    json=payload,
-                )
-            except Exception as exc:
-                return None, f"Failed to update preference: {exc}"
-            if resp.status_code == 401:
-                await self._handle_unauthorized(telegram_user_id)
-                return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
-        if resp.status_code == 422:
-            detail = resp.json().get("detail")
-            return None, f"Validation failed: {detail}"
-        if resp.status_code >= 400:
-            return None, f"Failed to update preference: {resp.text}"
+        resp, err = await self._request_with_retry(
+            telegram_user_id,
+            token,
+            lambda bearer: self.client.patch(
+                "/users/me/preferences", headers={"Authorization": f"Bearer {bearer}"}, json=payload
+            ),
+            error_prefix="Failed to update preference",
+            http_error_handler=lambda resp: (
+                f"Validation failed: {resp.json().get('detail')}"
+                if resp.status_code == 422
+                else None
+            ),
+        )
+        if err:
+            return None, err
         return resp.json(), None
 
     async def upload_receipt(
@@ -406,33 +420,21 @@ class BotService:
         content: bytes,
         telegram_user_id: Optional[int] = None,
     ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
-        if not self.client:
-            return None, "HTTP client is not ready."
-        try:
-            resp = await self.client.post(
+        resp, err = await self._request_with_retry(
+            telegram_user_id,
+            token,
+            lambda bearer: self.client.post(
                 "/import/expense/receipt",
-                headers={"Authorization": f"Bearer {token}"},
+                headers={"Authorization": f"Bearer {bearer}"},
                 files={"file": (filename, content, content_type)},
-            )
-        except Exception as exc:
-            return None, f"Failed to upload receipt: {exc}"
-        if resp.status_code == 401:
-            refreshed, refresh_err = await self._refresh_access_token(telegram_user_id)
-            if not refreshed:
-                return None, refresh_err
-            try:
-                resp = await self.client.post(
-                    "/import/expense/receipt",
-                    headers={"Authorization": f"Bearer {refreshed}"},
-                    files={"file": (filename, content, content_type)},
-                )
-            except Exception as exc:
-                return None, f"Failed to upload receipt: {exc}"
-            if resp.status_code == 401:
-                await self._handle_unauthorized(telegram_user_id)
-                return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
-        if resp.status_code >= 400:
-            return None, f"Receipt upload failed: {resp.text}"
+            ),
+            error_prefix="Failed to upload receipt",
+            http_error_handler=lambda resp: (
+                f"Receipt upload failed: {resp.text}" if resp.status_code >= 400 else None
+            ),
+        )
+        if err:
+            return None, err
         return resp.json(), None
 
     async def upload_receipt_text(
@@ -441,186 +443,140 @@ class BotService:
         text: str,
         telegram_user_id: Optional[int] = None,
     ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
-        if not self.client:
-            return None, "HTTP client is not ready."
-        try:
-            resp = await self.client.post(
+        resp, err = await self._request_with_retry(
+            telegram_user_id,
+            token,
+            lambda bearer: self.client.post(
                 "/import/expense/receipt-text",
-                headers={"Authorization": f"Bearer {token}"},
+                headers={"Authorization": f"Bearer {bearer}"},
                 json={"text": text},
-            )
-        except Exception as exc:
-            return None, f"Failed to upload receipt text: {exc}"
-        if resp.status_code == 401:
-            refreshed, refresh_err = await self._refresh_access_token(telegram_user_id)
-            if not refreshed:
-                return None, refresh_err
-            try:
-                resp = await self.client.post(
-                    "/import/expense/receipt-text",
-                    headers={"Authorization": f"Bearer {refreshed}"},
-                    json={"text": text},
-                )
-            except Exception as exc:
-                return None, f"Failed to upload receipt text: {exc}"
-            if resp.status_code == 401:
-                await self._handle_unauthorized(telegram_user_id)
-                return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
-        if resp.status_code >= 400:
-            return None, f"Receipt text upload failed: {resp.text}"
+            ),
+            error_prefix="Failed to upload receipt text",
+            http_error_handler=lambda resp: (
+                f"Receipt text upload failed: {resp.text}" if resp.status_code >= 400 else None
+            ),
+        )
+        if err:
+            return None, err
         return resp.json(), None
 
     async def fetch_receipt_task(
         self, token: str, task_id: str, telegram_user_id: Optional[int] = None
     ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
-        if not self.client:
-            return None, "HTTP client is not ready."
-        try:
-            resp = await self.client.get(
+        resp, err = await self._request_with_retry(
+            telegram_user_id,
+            token,
+            lambda bearer: self.client.get(
                 f"/import/expense/receipt/tasks/{task_id}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-        except Exception as exc:
-            return None, f"Failed to fetch receipt task: {exc}"
-        if resp.status_code == 401:
-            refreshed, refresh_err = await self._refresh_access_token(telegram_user_id)
-            if not refreshed:
-                return None, refresh_err
-            try:
-                resp = await self.client.get(
-                    f"/import/expense/receipt/tasks/{task_id}",
-                    headers={"Authorization": f"Bearer {refreshed}"},
-                )
-            except Exception as exc:
-                return None, f"Failed to fetch receipt task: {exc}"
-            if resp.status_code == 401:
-                await self._handle_unauthorized(telegram_user_id)
-                return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
-        if resp.status_code >= 400:
-            return None, f"Failed to fetch receipt task: {resp.text}"
+                headers={"Authorization": f"Bearer {bearer}"},
+            ),
+            error_prefix="Failed to fetch receipt task",
+        )
+        if err:
+            return None, err
         return resp.json(), None
 
     async def fetch_receipt_text_task(
         self, token: str, task_id: str, telegram_user_id: Optional[int] = None
     ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
-        if not self.client:
-            return None, "HTTP client is not ready."
-        try:
-            resp = await self.client.get(
+        resp, err = await self._request_with_retry(
+            telegram_user_id,
+            token,
+            lambda bearer: self.client.get(
                 f"/import/expense/receipt-text/tasks/{task_id}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-        except Exception as exc:
-            return None, f"Failed to fetch receipt text task: {exc}"
-        if resp.status_code == 401:
-            refreshed, refresh_err = await self._refresh_access_token(telegram_user_id)
-            if not refreshed:
-                return None, refresh_err
-            try:
-                resp = await self.client.get(
-                    f"/import/expense/receipt-text/tasks/{task_id}",
-                    headers={"Authorization": f"Bearer {refreshed}"},
-                )
-            except Exception as exc:
-                return None, f"Failed to fetch receipt text task: {exc}"
-            if resp.status_code == 401:
-                await self._handle_unauthorized(telegram_user_id)
-                return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
-        if resp.status_code >= 400:
-            return None, f"Failed to fetch receipt text task: {resp.text}"
+                headers={"Authorization": f"Bearer {bearer}"},
+            ),
+            error_prefix="Failed to fetch receipt text task",
+        )
+        if err:
+            return None, err
         return resp.json(), None
 
     async def list_categories(
         self, token: str, telegram_user_id: Optional[int] = None
     ) -> Tuple[Optional[List[dict[str, Any]]], Optional[str]]:
-        if not self.client:
-            return None, "HTTP client is not ready."
-        try:
-            resp = await self.client.get(
+        resp, err = await self._request_with_retry(
+            telegram_user_id,
+            token,
+            lambda bearer: self.client.get(
                 "/categories",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-        except Exception as exc:
-            return None, f"Failed to fetch categories: {exc}"
-        if resp.status_code == 401:
-            refreshed, refresh_err = await self._refresh_access_token(telegram_user_id)
-            if not refreshed:
-                return None, refresh_err
-            try:
-                resp = await self.client.get(
-                    "/categories",
-                    headers={"Authorization": f"Bearer {refreshed}"},
-                )
-            except Exception as exc:
-                return None, f"Failed to fetch categories: {exc}"
-            if resp.status_code == 401:
-                await self._handle_unauthorized(telegram_user_id)
-                return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
-        if resp.status_code >= 400:
-            return None, f"Failed to fetch categories: {resp.text}"
+                headers={"Authorization": f"Bearer {bearer}"},
+            ),
+            error_prefix="Failed to fetch categories",
+        )
+        if err:
+            return None, err
         data = resp.json()
         return data.get("data", []), None
 
     async def create_expense(
         self, token: str, payload: dict[str, Any], telegram_user_id: Optional[int] = None
     ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
-        if not self.client:
-            return None, "HTTP client is not ready."
-        try:
-            resp = await self.client.post(
+        resp, err = await self._request_with_retry(
+            telegram_user_id,
+            token,
+            lambda bearer: self.client.post(
                 "/expenses",
-                headers={"Authorization": f"Bearer {token}"},
+                headers={"Authorization": f"Bearer {bearer}"},
                 json=payload,
-            )
-        except Exception as exc:
-            return None, f"Failed to create expense: {exc}"
-        if resp.status_code == 401:
-            refreshed, refresh_err = await self._refresh_access_token(telegram_user_id)
-            if not refreshed:
-                return None, refresh_err
-            try:
-                resp = await self.client.post(
-                    "/expenses",
-                    headers={"Authorization": f"Bearer {refreshed}"},
-                    json=payload,
-                )
-            except Exception as exc:
-                return None, f"Failed to create expense: {exc}"
-            if resp.status_code == 401:
-                await self._handle_unauthorized(telegram_user_id)
-                return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
-        if resp.status_code >= 400:
-            return None, f"Expense create failed: {resp.text}"
+            ),
+            error_prefix="Failed to create expense",
+            http_error_handler=lambda resp: (
+                f"Expense create failed: {resp.text}" if resp.status_code >= 400 else None
+            ),
+        )
+        if err:
+            return None, err
         return resp.json(), None
 
     async def list_institutions(
         self, token: str, telegram_user_id: Optional[int] = None
     ) -> Tuple[Optional[List[dict[str, Any]]], Optional[str]]:
-        if not self.client:
-            return None, "HTTP client is not ready."
-        try:
-            resp = await self.client.get(
+        resp, err = await self._request_with_retry(
+            telegram_user_id,
+            token,
+            lambda bearer: self.client.get(
                 "/institutions",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-        except Exception as exc:
-            return None, f"Failed to fetch institutions: {exc}"
-        if resp.status_code == 401:
-            refreshed, refresh_err = await self._refresh_access_token(telegram_user_id)
-            if not refreshed:
-                return None, refresh_err
-            try:
-                resp = await self.client.get(
-                    "/institutions",
-                    headers={"Authorization": f"Bearer {refreshed}"},
-                )
-            except Exception as exc:
-                return None, f"Failed to fetch institutions: {exc}"
-            if resp.status_code == 401:
-                await self._handle_unauthorized(telegram_user_id)
-                return None, "Session expired. Use /start &lt;username&gt; &lt;password&gt;."
-        if resp.status_code >= 400:
-            return None, f"Failed to fetch institutions: {resp.text}"
+                headers={"Authorization": f"Bearer {bearer}"},
+            ),
+            error_prefix="Failed to fetch institutions",
+        )
+        if err:
+            return None, err
+        data = resp.json()
+        return data.get("data", []), None
+    
+    async def most_recent_categories(
+        self, token: str, limit: int = 4, telegram_user_id: Optional[int] = None
+    ) -> Tuple[Optional[List[dict[str, Any]]], Optional[str]]:
+        resp, err = await self._request_with_retry(
+            telegram_user_id,
+            token,
+            lambda bearer: self.client.get(
+                f"/categories/most-used?limit={limit}",
+                headers={"Authorization": f"Bearer {bearer}"},
+            ),
+            error_prefix="Failed to fetch categories-most-used",
+        )
+        if err:
+            return None, err
+        data = resp.json()
+        return data.get("data", []), None
+    
+    async def most_recent_institutions(
+        self, token: str, limit: int = 4, telegram_user_id: Optional[int] = None
+    ) -> Tuple[Optional[List[dict[str, Any]]], Optional[str]]:
+        resp, err = await self._request_with_retry(
+            telegram_user_id,
+            token,
+            lambda bearer: self.client.get(
+                f"/institutions/most-used?limit={limit}",
+                headers={"Authorization": f"Bearer {bearer}"},
+            ),
+            error_prefix="Failed to fetch institutions-most-used",
+        )
+        if err:
+            return None, err
         data = resp.json()
         return data.get("data", []), None
 
@@ -710,3 +666,13 @@ class UserScopedBotService:
         self, token: str
     ) -> Tuple[Optional[List[dict[str, Any]]], Optional[str]]:
         return await self._base.list_institutions(token, self._telegram_user_id)
+
+    async def most_recent_categories(
+        self, token: str, limit: int = 4
+    ) -> Tuple[Optional[List[dict[str, Any]]], Optional[str]]:
+        return await self._base.most_recent_categories(token, limit, self._telegram_user_id)
+    
+    async def most_recent_institutions(
+        self, token: str, limit: int = 4
+    ) -> Tuple[Optional[List[dict[str, Any]]], Optional[str]]:
+        return await self._base.most_recent_institutions(token, limit, self._telegram_user_id)

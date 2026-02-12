@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Optional, Any, List, Tuple
+from typing import Optional, Any, List, Callable, Awaitable
 from pathlib import Path
 import asyncio
+import httpx
 from uuid import uuid4
 
 from aiogram import Router, F
@@ -16,6 +17,8 @@ from handler_utils import (
     guess_content_type,
     receipt_keyboard,
     receipt_preview,
+    category_keyboard,
+    institution_keyboard,
     user_id_or_none,
     user_id_or_zero,
 )
@@ -38,17 +41,57 @@ def get_service() -> BotService:
 class FetchError(Exception):
     pass
 
-async def get_categories(svc: BotService, token: str) -> Optional[List[dict[str, Any]]]:
-    categories, cat_err = await svc.list_categories(token)
-    if cat_err:
-        raise FetchError(cat_err)
-    return categories
+async def svc_request(token: str, request_builder: Callable[[str], Awaitable[httpx.Response]], *args, **kwargs) -> Optional[dict[str, Any]]:
+    result, err = await request_builder(token, *args, **kwargs)
+    if err:
+        raise FetchError(err)
+    return result
 
-async def get_institutions(svc: BotService, token: str) -> Optional[List[dict[str, Any]]]:
-    institutions, cat_err = await svc.list_institutions(token)
-    if cat_err:
-        raise FetchError(cat_err)
-    return institutions
+async def set_receipt(user: Any, message: Message, receipt_id: str, svc: BotService, edit_payload: Callable[[str], Awaitable[dict[str, Any]]]) -> None:
+    payload = await svc.state.get_pending_receipt(user.id, receipt_id)
+    if not payload:
+        await svc.state.set_active_receipt_edit(user.id, None)
+        return
+
+    field = payload.get("_awaiting_field")
+    if not field:
+        await svc.state.set_active_receipt_edit(user.id, None)
+        return
+    
+    try:
+        _payload = await edit_payload(field)
+    except ValueError as ve:
+        await message.answer(str(ve))
+        return
+    except FetchError as fe:
+        await message.answer(str(fe))
+        return
+    payload.update(_payload)
+    
+    payload["_awaiting_field"] = None
+    await svc.state.set_pending_receipt(user.id, receipt_id, payload)
+    await svc.state.set_active_receipt_edit(user.id, None)
+    await message.answer(receipt_preview(payload), reply_markup=receipt_keyboard(receipt_id))
+
+async def set_receipt_command(callback: CallbackQuery, svc_request: Callable[[BotService, str, str], Awaitable[dict[str, Any]]]) -> None:
+    user = callback.from_user
+    svc = get_service().with_user(user_id_or_none(user))
+    parts = (callback.data or "").split(":", 2)
+    if len(parts) != 3:
+        await callback.answer("Invalid edit request.")
+        return
+    token = await get_cached_token_or_reply(
+        svc, callback.message.answer, "Unable to process receipt text"
+    )
+    if not token:
+        return
+    category_id, receipt_id = parts[1], parts[2]
+    async def payload_editor(field: str) -> Awaitable[dict[str, Any]]:
+        return await svc_request(svc, token, category_id)
+    
+    
+    await set_receipt(user, callback.message, receipt_id, svc, payload_editor)
+
 
 @router.message(Command("start"))
 async def handle_start(message: Message) -> None:
@@ -276,7 +319,7 @@ async def handle_receipt_edit(callback: CallbackQuery) -> None:
         if not token:
             return
         try:
-            categories = await get_categories(svc, token)
+            categories = await svc_request(token, lambda t: svc.list_categories(t))
         except FetchError as cat_err:
             await callback.message.answer(cat_err)
             return
@@ -288,7 +331,7 @@ async def handle_receipt_edit(callback: CallbackQuery) -> None:
         if not token:
             return
         try:
-            institutions = await get_institutions(svc, token)
+            institutions = await svc_request(token, lambda t: svc.list_institutions(t))
         except FetchError as inst_err:
             await callback.message.answer(inst_err)
             return
@@ -296,9 +339,58 @@ async def handle_receipt_edit(callback: CallbackQuery) -> None:
         await callback.message.answer(
             f"Send new institution name for the receipt. Available institutions:\n{inst_list}"
         )
+    elif field == "cat_btn":
+        if not token:
+            return
+        try:
+            most_categories = await svc_request(token, lambda t: svc.most_recent_categories(t))
+        except FetchError as cat_err:
+            await callback.message.answer(cat_err)
+            return
+        await callback.message.answer(
+            "Select new category for the receipt:",
+            reply_markup=category_keyboard(most_categories, receipt_id),
+        )
+    elif field == "ins_btn":
+        if not token:
+            return
+        try:
+            most_institutions = await svc_request(token, lambda t: svc.most_recent_institutions(t))
+        except FetchError as inst_err:
+            await callback.message.answer(inst_err)
+            return
+        await callback.message.answer(
+            "Select new institution for the receipt:",
+            reply_markup=institution_keyboard(most_institutions, receipt_id),
+        )
     else:
         await callback.message.answer(f"Send new value for {field}.")
 
+@router.callback_query(F.data.startswith("set_catategory:"))
+async def handle_set_category(callback: CallbackQuery) -> None:
+    async def payload_editor(svc: BotService, token: str, category_id: str) -> Awaitable[dict[str, Any]]:
+        payload: dict[str, Any] = {}
+        categories = await svc_request(token, lambda t: svc.list_categories(t))
+        match = next((c for c in categories if c.get("id") == int(category_id)), None)
+        if not match:
+            raise ValueError("Category not found.")
+        payload["category_id"] = match.get("id")
+        payload["_category_name"] = match.get("name")
+        return payload
+    await set_receipt_command(callback, payload_editor)
+
+@router.callback_query(F.data.startswith("set_institution:"))
+async def handle_set_institution(callback: CallbackQuery) -> None:
+    async def payload_editor(svc: BotService, token: str, institution_id: str) -> Awaitable[dict[str, Any]]:
+        payload: dict[str, Any] = {}
+        institutions = await svc_request(token, lambda t: svc.list_institutions(t))
+        match = next((i for i in institutions if i.get("id") == int(institution_id)), None)
+        if not match:
+            raise ValueError("Institution not found.")
+        payload["paid_account_id"] = match.get("id")
+        payload["_institution_name"] = match.get("name")
+        return payload
+    await set_receipt_command(callback, payload_editor)
 
 @router.message(F.text)
 async def handle_receipt_edit_text(message: Message) -> None:
@@ -310,14 +402,13 @@ async def handle_receipt_edit_text(message: Message) -> None:
     if text.startswith("/"):
         return
 
+    token = await get_cached_token_or_reply(
+        svc, message.answer, "Unable to process receipt text"
+    )
+    if not token:
+        return
     receipt_id = await svc.state.get_active_receipt_edit(user.id)
     if not receipt_id:
-        token = await get_cached_token_or_reply(
-            svc, message.answer, "Unable to process receipt text"
-        )
-        if not token:
-            return
-
         await message.answer("Text received. Running OCR, please wait...")
 
         async def _process_text() -> None:
@@ -379,71 +470,44 @@ async def handle_receipt_edit_text(message: Message) -> None:
         asyncio.create_task(_process_text())
         return
 
-    payload = await svc.state.get_pending_receipt(user.id, receipt_id)
-    if not payload:
-        await svc.state.set_active_receipt_edit(user.id, None)
-        return
-
-    field = payload.get("_awaiting_field")
-    if not field:
-        await svc.state.set_active_receipt_edit(user.id, None)
-        return
-
     value = message.text.strip()
-    token = await get_cached_token_or_reply(
-        svc, message.answer, "Missing token"
-    )
-    if not token:
-        return
-    if field == "amount":
-        try:
-            float(value)
-        except ValueError:
-            await message.answer("Amount must be a number. Try again.")
-            return
-        payload["amount"] = value
-    elif field == "currency":
-        if len(value) != 3 or not value.isalpha():
-            await message.answer("Currency must be a 3-letter code (e.g., USD).")
-            return
-        payload["currency"] = value.upper()
-    elif field == "occurred_at":
-        payload["occurred_at"] = value
-    elif field == "merchant":
-        payload["merchant"] = value
-    elif field == "name":
-        payload["name"] = value
-    elif field == "note":
-        payload["note"] = None if value == "-" else value
-    elif field == "category":
-        try:
-            categories = await get_categories(svc, token)
-        except FetchError as cat_err:
-            await message.answer(cat_err)
-            return
-        match = next((c for c in categories if c.get("name") == value), None)
-        if not match:
-            await message.answer("Category not found. Use exact category name.")
-            return
-        payload["category_id"] = match.get("id")
-        payload["_category_name"] = match.get("name")
-    elif field == "institution":
-        try:
-            institutions = await get_institutions(svc, token)
-        except FetchError as inst_err:
-            await message.answer(inst_err)
-            return
-        match = next((i for i in institutions if i.get("name") == value), None)
-        if not match:
-            await message.answer("Institution not found. Use exact institution name.")
-            return
-        payload["paid_account_id"] = match.get("id")
-        payload["_institution_name"] = match.get("name")
-    else:
-        await message.answer("Unknown field.")
-        return
-
-    payload["_awaiting_field"] = None
-    await svc.state.set_pending_receipt(user.id, receipt_id, payload)
-    await svc.state.set_active_receipt_edit(user.id, None)
-    await message.answer(receipt_preview(payload), reply_markup=receipt_keyboard(receipt_id))
+    
+    async def payload_editor(field: str) -> Awaitable[dict[str, Any]]:
+        payload: dict[str, Any] = {}
+        if field == "amount":
+            try:
+                float(value)
+            except ValueError:
+                raise ValueError("Amount must be a number. Try again.")
+            payload["amount"] = value
+        elif field == "currency":
+            if len(value) != 3 or not value.isalpha():
+                raise ValueError("Currency must be a 3-letter code (e.g., USD).")
+            payload["currency"] = value.upper()
+        elif field == "occurred_at":
+            payload["occurred_at"] = value
+        elif field == "merchant":
+            payload["merchant"] = value
+        elif field == "name":
+            payload["name"] = value
+        elif field == "note":
+            payload["note"] = None if value == "-" else value
+        elif field == "category":
+            categories = await svc_request(token, lambda t: svc.list_categories(t))
+            match = next((c for c in categories if c.get("name") == value), None)
+            if not match:
+                raise ValueError("Category not found. Use exact category name.")
+            payload["category_id"] = match.get("id")
+            payload["_category_name"] = match.get("name")
+        elif field == "institution":
+            institutions = await svc_request(token, lambda t: svc.list_institutions(t))
+            match = next((i for i in institutions if i.get("name") == value), None)
+            if not match:
+                raise ValueError("Institution not found. Use exact institution name.")
+            payload["paid_account_id"] = match.get("id")
+            payload["_institution_name"] = match.get("name")
+        else:
+            raise ValueError("Unknown field.")
+        return payload
+    
+    await set_receipt(user, message, receipt_id, svc, payload_editor)

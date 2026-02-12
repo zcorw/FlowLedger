@@ -88,13 +88,13 @@ def receipt_keyboard(receipt_id: str) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="Edit Category", callback_data=f"receipt_edit:category:{receipt_id}"
+                    text="Edit Category", callback_data=f"receipt_edit:cat_btn:{receipt_id}"
                 ),
                 InlineKeyboardButton(text="Edit Currency", callback_data=f"receipt_edit:currency:{receipt_id}"),
             ],
             [
                 InlineKeyboardButton(
-                    text="Edit Institution", callback_data=f"receipt_edit:institution:{receipt_id}"
+                    text="Edit Institution", callback_data=f"receipt_edit:ins_btn:{receipt_id}"
                 ),
                 InlineKeyboardButton(text="Edit Note", callback_data=f"receipt_edit:note:{receipt_id}"),
             ],
@@ -104,3 +104,18 @@ def receipt_keyboard(receipt_id: str) -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+def custom_receipt_keyboard(fields: list[dict[str, Any]], receipt_id: str, key: str) -> InlineKeyboardMarkup:
+    buttons = [
+        *(
+            [InlineKeyboardButton(text=cat["name"], callback_data=f"set_{key}:{cat['id']}:{receipt_id}")]
+            for cat in fields
+        ),
+        [InlineKeyboardButton(text="Other", callback_data=f"receipt_edit:{key}:{receipt_id}")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+def category_keyboard(categories: list[dict[str, Any]], receipt_id: str) -> InlineKeyboardMarkup:
+    return custom_receipt_keyboard(categories, receipt_id, "category")
+
+def institution_keyboard(institutions: list[dict[str, Any]], receipt_id: str) -> InlineKeyboardMarkup:
+    return custom_receipt_keyboard(institutions, receipt_id, "institution")
