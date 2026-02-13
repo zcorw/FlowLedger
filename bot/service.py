@@ -7,6 +7,7 @@ import httpx
 
 from config import Config
 from state_store import StateStore
+from datetime import date
 
 
 class BotService:
@@ -579,6 +580,24 @@ class BotService:
             return None, err
         data = resp.json()
         return data.get("data", []), None
+    
+    async def getMonthlyExpenseSummary(
+        self, token: str, telegram_user_id: Optional[int] = None
+    ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
+        start = date.today().replace(day=1).strftime("%Y-%m-%d")
+        end = date.today().strftime("%Y-%m-%d")
+        resp, err = await self._request_with_retry(
+            telegram_user_id,
+            token,
+            lambda bearer: self.client.get(
+                f"/custom/expenses/total/compare?from={start}&to={end}",
+                headers={"Authorization": f"Bearer {bearer}"},
+            ),
+            error_prefix="Failed to fetch monthly expense summary",
+        )
+        if err:
+            return None, err
+        return resp.json(), None
 
 
 class UserScopedBotService:
@@ -676,3 +695,8 @@ class UserScopedBotService:
         self, token: str, limit: int = 4
     ) -> Tuple[Optional[List[dict[str, Any]]], Optional[str]]:
         return await self._base.most_recent_institutions(token, limit, self._telegram_user_id)
+    
+    async def getMonthlyExpenseSummary(
+        self, token: str
+    ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
+        return await self._base.getMonthlyExpenseSummary(token, self._telegram_user_id)

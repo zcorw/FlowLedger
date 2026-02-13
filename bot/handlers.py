@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Optional, Any, List, Callable, Awaitable
+from typing import Optional, Any, Callable, Awaitable
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 import asyncio
 import httpx
@@ -278,9 +279,17 @@ async def handle_receipt_confirm(callback: CallbackQuery) -> None:
         return
 
     await svc.state.clear_pending_receipt(user_id_or_zero(user), receipt_id)
+    monthly_result, err = await svc.getMonthlyExpenseSummary(token)
+    summary = Decimal(monthly_result.get("current_total")).quantize(
+        Decimal("0.00"),
+        rounding=ROUND_HALF_UP
+    )
+    if err:
+        await callback.message.answer(f"Expense saved, but failed to fetch monthly summary: {err}")
     await callback.answer("Saved.")
     await callback.message.answer(
-        f"Expense saved: {created.get('name')} {created.get('amount')} {created.get('currency')}"
+        f"Expense saved: {created.get('name')} {created.get('amount')} {created.get('currency')},\n"
+        f"Your total expenses this month: {summary} {monthly_result.get('currency')}."
     )
 
 
