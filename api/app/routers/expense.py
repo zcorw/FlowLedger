@@ -579,7 +579,7 @@ def list_expenses(
 
     total = query.count()
     rows = (
-        query.order_by(Expense.occurred_at.desc(), Expense.id.desc())
+        query.order_by(Expense.occurred_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
