@@ -375,11 +375,12 @@ async def handle_receipt_edit(callback: CallbackQuery) -> None:
     else:
         await callback.message.answer(f"Send new value for {field}.")
 
-@router.callback_query(F.data.startswith("set_catategory:"))
+@router.callback_query(F.data.startswith("set_category:"))
 async def handle_set_category(callback: CallbackQuery) -> None:
     async def payload_editor(svc: BotService, token: str, category_id: str) -> Awaitable[dict[str, Any]]:
         payload: dict[str, Any] = {}
         categories = await svc_request(token, lambda t: svc.list_categories(t))
+        print(f"Categories: {categories} looking for {category_id}")
         match = next((c for c in categories if c.get("id") == int(category_id)), None)
         if not match:
             raise ValueError("Category not found.")
