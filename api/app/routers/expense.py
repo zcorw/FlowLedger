@@ -568,6 +568,7 @@ def list_expenses(
     page_size: int = Query(20, ge=1, le=200),
     from_dt: Optional[datetime] = Query(None, alias="from"),
     to_dt: Optional[datetime] = Query(None, alias="to"),
+    category_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -576,6 +577,8 @@ def list_expenses(
         query = query.filter(Expense.occurred_at >= from_dt)
     if to_dt:
         query = query.filter(Expense.occurred_at <= to_dt)
+    if category_id is not None:
+        query = query.filter(Expense.category_id == category_id)
 
     total = query.count()
     rows = (
