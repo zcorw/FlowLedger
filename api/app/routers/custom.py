@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import List, Optional
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, field_serializer
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -14,6 +14,7 @@ from ..auth import resolve_user_id
 from ..db import SessionLocal
 from ..models import User, UserPreference
 from ..db_tools.shared_sql import get_exchange_rate_by_as_of
+from ..time_range import normalize_datetime_range
 
 router = APIRouter(prefix="/v1/custom", tags=["custom"])
 
@@ -237,6 +238,7 @@ def list_institution_asset_changes(
 
 @router.get("/assets/monthly", response_model=MonthlyAssetTrend)
 def get_monthly_assets(
+    request: Request,
     from_dt: Optional[datetime] = Query(None, alias="from"),
     to_dt: Optional[datetime] = Query(None, alias="to"),
     limit: Optional[int] = Query(None,ge=1, le=200),
@@ -244,6 +246,7 @@ def get_monthly_assets(
     current_user: User = Depends(get_current_user),
     pref: UserPreference = Depends(get_user_pref),
 ):
+    from_dt, to_dt = normalize_datetime_range(request, from_dt, to_dt)
     base_currency = pref.base_currency
 
     sql = text(
@@ -264,7 +267,7 @@ def get_monthly_assets(
           JOIN deposit.institutions i ON i.id = fp.institution_id
           WHERE i.user_id = :user_id
             AND (:from_dt IS NULL OR pb.as_of >= :from_dt)
-            AND (:to_dt IS NULL OR pb.as_of <= :to_dt)
+            AND (:to_dt IS NULL OR pb.as_of < :to_dt)
             AND fp.status != 'closed'
         )
         SELECT
@@ -433,12 +436,14 @@ def get_total_assets_by_currency(
 
 @router.get("/expenses/total/compare", response_model=ExpensePeriodCompareOut)
 def get_expense_total_compare(
+    request: Request,
     from_dt: Optional[datetime] = Query(None, alias="from"),
     to_dt: Optional[datetime] = Query(None, alias="to"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     pref: UserPreference = Depends(get_user_pref),
 ):
+    from_dt, to_dt = normalize_datetime_range(request, from_dt, to_dt)
     if not from_dt or not to_dt:
         raise HTTPException(status_code=422, detail="missing_time_range")
     if from_dt >= to_dt:

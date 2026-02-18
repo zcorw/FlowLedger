@@ -35,6 +35,7 @@ from ..schemas.deposit_import import (
     ImportSectionResult,
 )
 from ..schemas.import_task import ImportTaskCreateResponse, ImportTaskStatus
+from ..time_range import normalize_datetime_range
 
 
 router = APIRouter(prefix="/v1", tags=["deposit"])
@@ -753,6 +754,7 @@ def delete_product(
 
 @router.get("/products/{product_id}/balances", response_model=BalancesOut)
 def list_balances(
+    request: Request,
     product_id: int,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
@@ -761,6 +763,7 @@ def list_balances(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    from_dt, to_dt = normalize_datetime_range(request, from_dt, to_dt)
     prod = (
         db.query(FinancialProduct)
         .join(Institution, FinancialProduct.institution_id == Institution.id)
@@ -774,7 +777,7 @@ def list_balances(
     if from_dt:
         query = query.filter(ProductBalance.as_of >= from_dt)
     if to_dt:
-        query = query.filter(ProductBalance.as_of <= to_dt)
+        query = query.filter(ProductBalance.as_of < to_dt)
 
     total = query.count()
     rows = (

@@ -3,13 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from ..auth import resolve_user_id
 from ..db import SessionLocal
 from ..models import SchedulerJob, SchedulerJobRun, SchedulerConfirmation
+from ..time_range import normalize_datetime_range
 
 router = APIRouter(prefix="/v1", tags=["scheduler"])
 
@@ -156,12 +157,14 @@ def list_jobs(
 
 @router.get("/job-runs", response_model=List[JobRunOut])
 def list_job_runs(
+    request: Request,
     status: Optional[str] = Query(default=None, max_length=32),
     from_ts: Optional[datetime] = Query(default=None, alias="from"),
     to_ts: Optional[datetime] = Query(default=None, alias="to"),
     db: Session = Depends(get_db),
     user_id: int = Depends(resolve_user_id),
 ) -> List[JobRunOut]:
+    from_ts, to_ts = normalize_datetime_range(request, from_ts, to_ts)
     query = (
         db.query(SchedulerJobRun)
         .join(SchedulerJob, SchedulerJobRun.job_id == SchedulerJob.id)
@@ -172,7 +175,7 @@ def list_job_runs(
     if from_ts:
         query = query.filter(SchedulerJobRun.scheduled_at >= from_ts)
     if to_ts:
-        query = query.filter(SchedulerJobRun.scheduled_at <= to_ts)
+        query = query.filter(SchedulerJobRun.scheduled_at < to_ts)
     return query.order_by(SchedulerJobRun.scheduled_at.desc()).all()
 
 

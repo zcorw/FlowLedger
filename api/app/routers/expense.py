@@ -19,6 +19,7 @@ from ..import_tasks import create_task, get_task, save_upload_file, update_task
 from ..models import Currency, Expense, ExpenseCategory, FileAsset, User
 from ..receipt_ocr import ReceiptOcrError, recognize_receipt, recognize_receipt_text
 from ..schemas.import_task import ImportTaskCreateResponse, ImportTaskStatus
+from ..time_range import normalize_datetime_range
 
 router = APIRouter(prefix="/v1", tags=["expense"])
 
@@ -564,6 +565,7 @@ class ExpenseBatchOut(BaseModel):
 # Paginated expense list with optional time range, ordered by occurred_at desc
 @router.get("/expenses", response_model=ExpenseListOut)
 def list_expenses(
+    request: Request,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     from_dt: Optional[datetime] = Query(None, alias="from"),
@@ -572,11 +574,12 @@ def list_expenses(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    from_dt, to_dt = normalize_datetime_range(request, from_dt, to_dt)
     query = db.query(Expense).filter(Expense.user_id == current_user.id)
     if from_dt:
         query = query.filter(Expense.occurred_at >= from_dt)
     if to_dt:
-        query = query.filter(Expense.occurred_at <= to_dt)
+        query = query.filter(Expense.occurred_at < to_dt)
     if category_id is not None:
         query = query.filter(Expense.category_id == category_id)
 

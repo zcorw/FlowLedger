@@ -7,7 +7,7 @@ import httpx
 
 from config import Config
 from state_store import StateStore
-from datetime import date, timedelta
+from datetime import date
 
 
 class BotService:
@@ -585,7 +585,7 @@ class BotService:
         self, token: str, telegram_user_id: Optional[int] = None
     ) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
         start = date.today().replace(day=1).strftime("%Y-%m-%d")
-        end = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        end = date.today().strftime("%Y-%m-%d")
         resp, err = await self._request_with_retry(
             telegram_user_id,
             token,
