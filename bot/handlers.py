@@ -11,6 +11,8 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 
+from dateutil import parser
+
 from service import BotService
 from handler_utils import (
     extract_ocr_fields,
@@ -495,7 +497,8 @@ async def handle_receipt_edit_text(message: Message) -> None:
                 raise ValueError("Currency must be a 3-letter code (e.g., USD).")
             payload["currency"] = value.upper()
         elif field == "occurred_at":
-            payload["occurred_at"] = value
+            dt = parser.parse(value)  # just to validate the date format
+            payload["occurred_at"] = dt.isoformat()
         elif field == "merchant":
             payload["merchant"] = value
         elif field == "name":
