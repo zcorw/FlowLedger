@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Optional
-from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, field_serializer
@@ -127,10 +126,14 @@ def list_institution_asset_changes(
             i.id AS institution_id,
             i.name AS institution_name,
             i.type AS institution_type,
+            date_trunc('month', pb.as_of) AS month_start,
             pb.as_of,
             pb.amount,
             fp.currency,
-            DENSE_RANK() OVER (ORDER BY pb.as_of DESC) AS rnk,
+            row_number() OVER (
+              PARTITION BY pb.product_id, date_trunc('month', pb.as_of)
+              ORDER BY pb.as_of DESC
+            ) AS rn,
         """
         + get_exchange_rate_by_as_of(
             code=":target_code",
@@ -150,23 +153,24 @@ def list_institution_asset_changes(
             institution_id,
             institution_name,
             institution_type,
+            month_start,
             as_of,
             amount,
             fx_rate
           FROM balance_ranked
-          WHERE rnk <= 2
-          ORDER BY as_of DESC
+          WHERE rn = 1
         ),
         institution_snapshots AS (
           SELECT
             institution_id,
             institution_name,
             institution_type,
-            as_of::date AS as_of,
+            month_start,
+            MAX(as_of) AS as_of,
             SUM(amount * fx_rate) AS total_amount
           FROM balance_fx
           WHERE fx_rate IS NOT NULL
-          GROUP BY institution_id, institution_name, institution_type, as_of::date
+          GROUP BY institution_id, institution_name, institution_type, month_start
         ),
         ranked AS (
           SELECT
@@ -175,7 +179,7 @@ def list_institution_asset_changes(
             institution_type,
             as_of,
             total_amount,
-            row_number() OVER (PARTITION BY institution_id ORDER BY as_of DESC) AS rn
+            row_number() OVER (PARTITION BY institution_id ORDER BY month_start DESC) AS rn
           FROM institution_snapshots
         ),
         pivot AS (
@@ -196,12 +200,12 @@ def list_institution_asset_changes(
           institution_name,
           institution_type,
           current_as_of,
-          previous_as_of,
+          COALESCE(previous_as_of, current_as_of) AS previous_as_of,
           current_total,
-          previous_total,
-          (current_total - previous_total) AS delta
+          COALESCE(previous_total, 0) AS previous_total,
+          (current_total - COALESCE(previous_total, 0)) AS delta
         FROM pivot
-        WHERE previous_total IS NOT NULL
+        WHERE current_total IS NOT NULL
         ORDER BY delta DESC
         """
     )
@@ -214,7 +218,7 @@ def list_institution_asset_changes(
     head_count = (limit + 1) // 2   # 前半：向上取整
     tail_count = limit // 2         # 后半：向下取整
     head = rows[:head_count]
-    tail = rows[-tail_count:]
+    tail = rows[-tail_count:] if tail_count else []
     rows = head + tail
     data = [
         InstitutionAssetChange(
@@ -376,20 +380,22 @@ def get_total_assets_by_currency(
 
     sql = text(
         f"""
-        WITH balance_fx AS (
+        WITH monthly_last AS (
           SELECT
-            fp.id,
             fp.{key} AS target,
+            date_trunc('month', pb.as_of) AS month_start,
             pb.as_of,
             pb.amount,
-            DENSE_RANK() OVER (ORDER BY pb.as_of DESC) AS rnk,
+            row_number() OVER (
+              PARTITION BY pb.product_id, date_trunc('month', pb.as_of)
+              ORDER BY pb.as_of DESC
+            ) AS rn,
         """
         + get_exchange_rate_by_as_of(
             code=":target_code",
-            as_of="fp",
+            as_of="pb",
             column="fx_rate",
             currency="fp",
-            as_of_column="amount_updated_at",
         )
         + """
           FROM deposit.product_balances pb
@@ -397,16 +403,40 @@ def get_total_assets_by_currency(
           JOIN deposit.institutions i ON i.id = fp.institution_id
           WHERE i.user_id = :user_id
             AND fp.status != 'closed'
+        ),
+        target_monthly_totals AS (
+          SELECT
+            target,
+            month_start,
+            SUM(amount * fx_rate) AS total
+          FROM monthly_last
+          WHERE rn = 1
+            AND fx_rate IS NOT NULL
+          GROUP BY target, month_start
+        ),
+        ranked AS (
+          SELECT
+            target,
+            month_start,
+            total,
+            row_number() OVER (PARTITION BY target ORDER BY month_start DESC) AS rn
+          FROM target_monthly_totals
+        ),
+        pivot AS (
+          SELECT
+            target,
+            MAX(CASE WHEN rn = 1 THEN total END) AS current_total,
+            MAX(CASE WHEN rn = 2 THEN total END) AS previous_total
+          FROM ranked
+          WHERE rn <= 2
+          GROUP BY target
         )
         SELECT
-          SUM(amount * fx_rate) AS total,
-          as_of,
-          target
-        FROM balance_fx
-        WHERE fx_rate IS NOT NULL
-          AND rnk <= 2
-        GROUP BY as_of, target
-        ORDER BY as_of DESC
+          target,
+          current_total,
+          COALESCE(previous_total, 0) AS previous_total
+        FROM pivot
+        WHERE current_total IS NOT NULL
         """
     )
     rows = list(db.execute(
@@ -416,16 +446,13 @@ def get_total_assets_by_currency(
             "target_code": base_currency,
         },
     ).mappings())
-    results: List[AssetCurrencyPoint] = [] 
-    grouped = defaultdict(list)
+    results: List[AssetCurrencyPoint] = []
     for row in rows:
-        grouped[row["target"]].append(row)
-    for target, rows in grouped.items():
-        change = rows[0]["total"] - rows[1]["total"] if len(rows) > 1 else 0
-        rate = change / rows[0]["total"] if len(rows) > 1 else 1
+        change = row["current_total"] - row["previous_total"]
+        rate = change / row["current_total"] if row["current_total"] else Decimal("0")
         results.append(AssetCurrencyPoint(
-            target=target,
-            amount=rows[0]["total"],
+            target=row["target"],
+            amount=row["current_total"],
             change=change,
             rate=rate,
         ))
