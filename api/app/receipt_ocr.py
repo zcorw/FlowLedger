@@ -6,6 +6,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
 
 import httpx
 
@@ -67,8 +68,9 @@ def _receipt_schema() -> Dict[str, Any]:
 
 
 def _receipt_prompt(category_list: str, *, receipt_text: Optional[str] = None) -> str:
+    date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     prompt = (
-        "You are a receipt summarization engine."
+        f"You are a receipt summarization engine. Today's date is {date}."
         "Hard constraints (must follow):"
         "- Output ONLY valid JSON. No markdown, no explanations."
         "- Produce EXACTLY ONE summary record."
